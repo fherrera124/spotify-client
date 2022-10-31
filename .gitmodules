@@ -1,0 +1,6 @@
+[submodule "esp32-rotary-encoder"]
+	path = components/esp32-rotary-encoder
+	url = https://github.com/fherrera124/esp32-rotary-encoder.git
+[submodule "esp32-rotary-encoder"]
+	path = components/button
+	url = https://github.com/fherrera124/button.git
