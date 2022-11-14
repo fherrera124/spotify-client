@@ -264,7 +264,7 @@ static void now_playing_page(u8g2_t* u8g2)
             case toBePaused:
                 ESP_LOGW(TAG, "EARLY PAUSE");
                 track_state = paused;
-                progress_sec = pr = last_progress;
+                pr = progress_sec;
                 break;
             case toBeUnpaused:
                 ESP_LOGW(TAG, "EARLY UNPAUSE");
