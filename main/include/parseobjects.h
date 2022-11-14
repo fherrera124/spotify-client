@@ -9,12 +9,13 @@ typedef enum {
     nameParsed = 0x01,
     artistParsed = 0x02,
     albumParsed = 0x04,
-    // durationParsed  = 0x08,
-    // progressParsed  = 0x10,
+    durationParsed = 0x08,
+    progressParsed = 0x10,
     isPlayingParsed = 0x20,
     deviceParsed = 0x40,
-    trackAllParsed = nameParsed | artistParsed | albumParsed | isPlayingParsed | deviceParsed
-    // | durationParsed | progressParsed
+    trackAllParsed = nameParsed | artistParsed | albumParsed
+        | isPlayingParsed | deviceParsed
+        | durationParsed | progressParsed
 
 } TrackParsed;
 
@@ -40,9 +41,9 @@ typedef struct
     char*       name;
     StrList*    artists;
     char*       album;
-    int         duration;
-    int         progress;
-    bool        isPlaying;
+    time_t      duration_ms;
+    time_t      progress_ms;
+    bool        isPlaying : 1;
     Device*     device;
     TrackParsed parsed;
 } TrackInfo;

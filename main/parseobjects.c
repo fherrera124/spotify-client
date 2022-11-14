@@ -1,81 +1,110 @@
-#include "parseobjects.h"
-
+/* Includes ------------------------------------------------------------------*/
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #include "esp_log.h"
 #include "jsmn.h"
+#include "parseobjects.h"
 
-typedef void (*PathCb)(const char *, jsmntok_t *, void *);
-
-#define TRACK_CALLBACKS_SIZE 5
-PathCb trackCallbacks[TRACK_CALLBACKS_SIZE];
-
+/* Private macro -------------------------------------------------------------*/
+#define TRACK_CALLBACKS_SIZE  6
 #define TOKENS_CALLBACKS_SIZE 2
-PathCb tokensCallbacks[TOKENS_CALLBACKS_SIZE];
+#define MAX_TOKENS            600
 
-#define MAX_TOKENS 600
+/* Private types -------------------------------------------------------------*/
+typedef void (*PathCb)(const char*, jsmntok_t*, void*);
 
-static const char *TAG = "PARSE_OBJECT";
+/* Private variables ---------------------------------------------------------*/
+static const char* TAG = "PARSE_OBJECT";
+PathCb             trackCallbacks[TRACK_CALLBACKS_SIZE];
+PathCb             tokensCallbacks[TOKENS_CALLBACKS_SIZE];
 
-void onDevicePlaying(const char *js, jsmntok_t *root, void *object) {
-    TrackInfo *track = (TrackInfo *)object;
+/* Private function prototypes -----------------------------------------------*/
+static void onDevicePlaying(const char* js, jsmntok_t* root, void* obj);
+static void onTrackName(const char* js, jsmntok_t* root, void* obj);
+static void onArtistsName(const char* js, jsmntok_t* root, void* obj);
+static void onAlbumName(const char* js, jsmntok_t* root, void* obj);
+static void onTrackIsPlaying(const char* js, jsmntok_t* root, void* obj);
+static void onTrackTime(const char* js, jsmntok_t* root, void* obj);
+static void onAccessToken(const char* js, jsmntok_t* root, void* obj);
+static void onExpiresIn(const char* js, jsmntok_t* root, void* obj);
+static int  natoi(const char* str, short len);
 
-    jsmntok_t *device = object_get_member(js, root, "device");
-    if (!device) return;
+/* Exported functions --------------------------------------------------------*/
+static void onDevicePlaying(const char* js, jsmntok_t* root, void* obj)
+{
+    TrackInfo* track = (TrackInfo*)obj;
 
-    jsmntok_t *value = object_get_member(js, device, "id");
-    if (!value) return;
+    jsmntok_t* device = object_get_member(js, root, "device");
+    if (!device)
+        return;
+
+    jsmntok_t* value = object_get_member(js, device, "id");
+    if (!value)
+        return;
 
     track->device->id = jsmn_obj_dup(js, value);
-    if (track->device->id == NULL) return;
+    if (track->device->id == NULL)
+        return;
 
     value = object_get_member(js, device, "name");
-    if (!value) return;
+    if (!value)
+        return;
 
     track->device->name = jsmn_obj_dup(js, value);
-    if (track->device->name == NULL) return;
+    if (track->device->name == NULL)
+        return;
 
     track->parsed |= deviceParsed;
     ESP_LOGD(TAG, "Device id: %s, name: %s", track->device->id, track->device->name);
 }
 
-void onTrackName(const char *js, jsmntok_t *root, void *object) {
-    TrackInfo *track = (TrackInfo *)object;
+static void onTrackName(const char* js, jsmntok_t* root, void* obj)
+{
+    TrackInfo* track = (TrackInfo*)obj;
 
-    jsmntok_t *value = object_get_member(js, root, "item");
-    if (!value) return;
+    jsmntok_t* value = object_get_member(js, root, "item");
+    if (!value)
+        return;
 
     value = object_get_member(js, value, "name");
-    if (!value) return;
+    if (!value)
+        return;
 
     track->name = jsmn_obj_dup(js, value);
-    if (track->name == NULL) return;
+    if (track->name == NULL)
+        return;
 
     track->parsed |= nameParsed;
     ESP_LOGD(TAG, "Track: %s", track->name);
 }
 
-void onArtistsName(const char *js, jsmntok_t *root, void *object) {
-    TrackInfo *track = (TrackInfo *)object;
+static void onArtistsName(const char* js, jsmntok_t* root, void* obj)
+{
+    TrackInfo* track = (TrackInfo*)obj;
 
-    jsmntok_t *value = object_get_member(js, root, "item");
-    if (!value) return;
+    jsmntok_t* value = object_get_member(js, root, "item");
+    if (!value)
+        return;
 
     value = object_get_member(js, value, "artists");
-    if (!value) return;
+    if (!value)
+        return;
 
-    jsmntok_t *artists = value;
+    jsmntok_t* artists = value;
     for (uint16_t i = 0; i < (artists->size); i++) {
         value = array_get_at(artists, i);
-        if (!value) return;
+        if (!value)
+            return;
 
         value = object_get_member(js, value, "name");
-        if (!value) return;
+        if (!value)
+            return;
 
-        char *artist = jsmn_obj_dup(js, value);
-        if (artist == NULL) return;
+        char* artist = jsmn_obj_dup(js, value);
+        if (artist == NULL)
+            return;
 
         if (ESP_OK != strListAppend(track->artists, artist)) {
             free(artist);
@@ -86,47 +115,94 @@ void onArtistsName(const char *js, jsmntok_t *root, void *object) {
     track->parsed |= artistParsed;
 }
 
-void onAlbumName(const char *js, jsmntok_t *root, void *object) {
-    TrackInfo *track = (TrackInfo *)object;
+static void onAlbumName(const char* js, jsmntok_t* root, void* obj)
+{
+    TrackInfo* track = (TrackInfo*)obj;
 
-    jsmntok_t *value = object_get_member(js, root, "item");
-    if (!value) return;
+    jsmntok_t* value = object_get_member(js, root, "item");
+    if (!value)
+        return;
 
     value = object_get_member(js, value, "album");
-    if (!value) return;
+    if (!value)
+        return;
 
     value = object_get_member(js, value, "name");
-    if (!value) return;
+    if (!value)
+        return;
 
     track->album = jsmn_obj_dup(js, value);
-    if (track->album == NULL) return;
+    if (track->album == NULL)
+        return;
 
     track->parsed |= albumParsed;
     ESP_LOGD(TAG, "Album: %s", track->album);
 }
 
-void onTrackIsPlaying(const char *js, jsmntok_t *root, void *object) {
-    TrackInfo *track = (TrackInfo *)object;
+static void onTrackIsPlaying(const char* js, jsmntok_t* root, void* obj)
+{
+    TrackInfo* track = (TrackInfo*)obj;
 
-    jsmntok_t *value = object_get_member(js, root, "is_playing");
-    if (!value) return;
+    jsmntok_t* value = object_get_member(js, root, "is_playing");
+    if (!value)
+        return;
 
-    char type        = (js + (value->start))[0];
+    char type = (js + (value->start))[0];
     track->isPlaying = type == 't' ? true : false;
     track->parsed |= isPlayingParsed;
 }
 
-void onAccessToken(const char *js, jsmntok_t *root, void *object) {
-    Tokens *token = (Tokens *)object;
+static void onTrackTime(const char* js, jsmntok_t* root, void* obj)
+{
+    TrackInfo* track = (TrackInfo*)obj;
 
-    jsmntok_t *value = object_get_member(js, root, "access_token");
-    if (!value) return;
+    jsmntok_t* value = object_get_member(js, root, "progress_ms");
+    if (!value)
+        return;
+
+    track->progress_ms = natoi(js + value->start, value->end - value->start);
+    track->parsed |= progressParsed;
+
+    value = object_get_member(js, root, "item");
+    if (!value)
+        return;
+
+    value = object_get_member(js, value, "duration_ms");
+    if (!value)
+        return;
+
+    track->duration_ms = natoi(js + value->start, value->end - value->start);
+    track->parsed |= durationParsed;
+}
+
+static void onAccessToken(const char* js, jsmntok_t* root, void* obj)
+{
+    Tokens* token = (Tokens*)obj;
+
+    jsmntok_t* value = object_get_member(js, root, "access_token");
+    if (!value)
+        return;
     token->access_token = jsmn_obj_dup(js, value);
-    if (token->access_token == NULL) return;
+    if (token->access_token == NULL)
+        return;
     token->parsed |= accessTokenParsed;
 }
 
-static int str2int(const char *str, short len) {
+static void onExpiresIn(const char* js, jsmntok_t* root, void* obj)
+{
+    Tokens* token = (Tokens*)obj;
+
+    jsmntok_t* value = object_get_member(js, root, "expires_in");
+    if (!value)
+        return;
+
+    int seconds = natoi(js + value->start, value->end - value->start);
+    token->expiresIn = time(0) + seconds;
+    token->parsed |= expiresInParsed;
+}
+
+static int natoi(const char* str, short len)
+{
     int ret = 0;
     for (short i = 0; i < len; ++i) {
         ret = ret * 10 + (str[i] - '0');
@@ -134,19 +210,9 @@ static int str2int(const char *str, short len) {
     return ret;
 }
 
-void onExpiresIn(const char *js, jsmntok_t *root, void *object) {
-    Tokens *token = (Tokens *)object;
-
-    jsmntok_t *value = object_get_member(js, root, "expires_in");
-    if (!value) return;
-
-    int seconds      = str2int(js + value->start, value->end - value->start);
-    token->expiresIn = time(0) + seconds;
-    token->parsed |= expiresInParsed;
-}
-
-void parsejson(const char *js, PathCb *callbacks, size_t callbacksSize, void *object) {
-    jsmntok_t *tokens = malloc(sizeof(*tokens) * MAX_TOKENS);
+void parsejson(const char* js, PathCb* callbacks, size_t callbacksSize, void* obj)
+{
+    jsmntok_t* tokens = malloc(sizeof(*tokens) * MAX_TOKENS);
 
     jsmn_parser jsmn;
     jsmn_init(&jsmn);
@@ -156,40 +222,45 @@ void parsejson(const char *js, PathCb *callbacks, size_t callbacksSize, void *ob
     if (n < 0) {
         ESP_LOGE(TAG, "Parse error: %s\n", error_str(n));
     } else {
-        jsmntok_t *root = &tokens[0];
+        jsmntok_t* root = &tokens[0];
         for (size_t i = 0; i < callbacksSize; i++) {
             PathCb fn = callbacks[i];
-            fn(js, root, object);
+            fn(js, root, obj);
         }
     }
     free(tokens);
 }
 
-void init_functions_cb() {
+void init_functions_cb()
+{
     trackCallbacks[0] = onTrackName;
     trackCallbacks[1] = onArtistsName;
     trackCallbacks[2] = onAlbumName;
     trackCallbacks[3] = onTrackIsPlaying;
-    trackCallbacks[4] = onDevicePlaying;
+    trackCallbacks[4] = onTrackTime;
+    trackCallbacks[5] = onDevicePlaying;
 
     tokensCallbacks[0] = onAccessToken;
     tokensCallbacks[1] = onExpiresIn;
 }
 
-TrackParsed parseTrackInfo(const char *js, TrackInfo *track) {
+TrackParsed parseTrackInfo(const char* js, TrackInfo* track)
+{
     parsejson(js, trackCallbacks, TRACK_CALLBACKS_SIZE, track);
     return track->parsed;
 }
 
-TokensParsed parseTokens(const char *js, Tokens *tokens) {
+TokensParsed parseTokens(const char* js, Tokens* tokens)
+{
     parsejson(js, tokensCallbacks, TOKENS_CALLBACKS_SIZE, tokens);
     return tokens->parsed;
 }
 
-void available_devices(const char *js, StrList *dev_list) {
-    jsmntok_t *tokens = malloc(sizeof(jsmntok_t) * 40); /* We expect no more than 40 JSON tokens */
+void available_devices(const char* js, StrList* dev_list)
+{
+    jsmntok_t* tokens = malloc(sizeof(jsmntok_t) * 40); /* We expect no more than 40 JSON tokens */
 
-    jsmntok_t *root = &tokens[0];
+    jsmntok_t* root = &tokens[0];
 
     jsmn_parser jsmn;
     jsmn_init(&jsmn);
@@ -200,20 +271,24 @@ void available_devices(const char *js, StrList *dev_list) {
         goto exit;
     }
 
-    jsmntok_t *value = object_get_member(js, root, "devices");
-    if (!value) goto exit;
+    jsmntok_t* value = object_get_member(js, root, "devices");
+    if (!value)
+        goto exit;
 
-    jsmntok_t *devices = value;
+    jsmntok_t* devices = value;
 
     for (uint16_t i = 0; i < (devices->size); i++) {
         value = array_get_at(devices, i);
-        if (!value) goto exit;
+        if (!value)
+            goto exit;
 
         value = object_get_member(js, value, "id");
-        if (!value) goto exit;
+        if (!value)
+            goto exit;
 
-        char *id = jsmn_obj_dup(js, value);
-        if (!id) goto exit;
+        char* id = jsmn_obj_dup(js, value);
+        if (!id)
+            goto exit;
 
         if (ESP_OK != strListAppend(dev_list, id)) {
             free(id);

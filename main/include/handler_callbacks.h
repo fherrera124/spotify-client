@@ -9,5 +9,5 @@ typedef struct {
     StrList* uris;
 } Playlists_t;
 
-void default_fun(char* buffer, esp_http_client_event_t* evt);
-void get_playlists(char* buffer, esp_http_client_event_t* evt);
+void default_event_handler(char* buffer, esp_http_client_event_t* evt);
+void playlists_handler(char* buffer, esp_http_client_event_t* evt);
