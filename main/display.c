@@ -8,7 +8,6 @@
 #include "u8g2_esp8266_hal.h"
 
 /* Private macro -------------------------------------------------------------*/
-#define MS_TO_SEC(ms) ((ms) / 1000) // no need for ms precision
 
 /* Private types -------------------------------------------------------------*/
 
@@ -22,7 +21,7 @@ static void playlists_page(u8g2_t* u8g2);
 
 /* Locally scoped variables --------------------------------------------------*/
 QueueHandle_t encoder_queue_hlr;
-const char*   TAG = "ST7920";
+const char*   TAG = "DISPLAY";
 
 /* Globally scoped variables definitions -------------------------------------*/
 TaskHandle_t MENU_TASK = NULL;
@@ -81,7 +80,7 @@ static void initial_menu_page(u8g2_t* u8g2)
     do {
         selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
             "Spotify", selection,
-            "abcdef\nNow playing\nMy playlists");
+            "Available devices\nNow playing\nMy playlists");
         switch (selection) {
         case 1:
             break;
@@ -166,32 +165,26 @@ static void now_playing_page(u8g2_t* u8g2)
     u8g2_DrawStr(u8g2, 10, 20, "Retrieving player state...");
     u8g2_SendBuffer(u8g2);
 
+    /* wait for the current track */
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     assert(TRACK);
-    u8g2_ClearBuffer(u8g2);
     u8g2_SetFont(u8g2, u8g2_font_helvB18_tr);
     u8g2_uint_t track_width = 10 + u8g2_GetStrWidth(u8g2, TRACK->name);
     u8g2_uint_t offset = 0, x = 0;
 
-    TickType_t start, finish;
-    time_t     pr, last_progress = 0, progress_sec = 0;
-    char       m_str[3], s_str[3];
-    uint32_t   notif;
-
+    TickType_t start = xTaskGetTickCount();
+    time_t     progress_base = TRACK->progress_ms;
+    time_t     last_progress = 0, progress_ms = 0;
+    char       mins[3], secs[3];
+    strcpy(mins, u8x8_u8toa(progress_base / 60000, 2));
+    strcpy(secs, u8x8_u8toa((progress_base / 1000) % 60, 2));
     enum {
         paused,
         playing,
         toBePaused,
         toBeUnpaused,
-    } track_state;
-
-    pr = TRACK->progress_ms ? MS_TO_SEC(TRACK->progress_ms) : 0;
-
-    strcpy(m_str, u8x8_u8toa(pr / 60, 2));
-    strcpy(s_str, u8x8_u8toa(pr % 60, 2));
-
-    start = xTaskGetTickCount();
-    track_state = TRACK->isPlaying ? playing : paused;
+    } track_state
+        = TRACK->isPlaying ? playing : paused;
 
     while (1) {
 
@@ -217,19 +210,19 @@ static void now_playing_page(u8g2_t* u8g2)
                 }
             } else { /* ROTARY_ENCODER_EVENT intercepted */
                 player_cmd(&queue_event);
-                /* now block the task to ignore the values the ISR is putting
+                /* now block the task to ignore the values the ISR is storing
                  * in the queue while the rotary encoder is still moving */
                 vTaskDelay(pdMS_TO_TICKS(500));
                 /* The task is active again. Reset the queue to discard
-                 * the last move of the encoder */
+                 * the last move of the rotary encoder */
                 xQueueReset(encoder_queue_hlr);
             }
         }
 
         /* Wait for track event ------------------------------------------------------*/
-
+        uint32_t notif;
         if (pdPASS == xTaskNotifyWait(0, ULONG_MAX, &notif, pdMS_TO_TICKS(50))) {
-            pr = MS_TO_SEC(TRACK->progress_ms);
+            progress_base = TRACK->progress_ms;
 
             if ((notif & SAME_TRACK) != 0) {
                 ESP_LOGW(TAG, "Same track event");
@@ -247,11 +240,12 @@ static void now_playing_page(u8g2_t* u8g2)
             }
         } else { /* xTicksToWait expired */
             switch (track_state) {
-            case playing:
-                finish = xTaskGetTickCount();
+            case playing:;
+                TickType_t finish = xTaskGetTickCount();
 
-                progress_sec = pr + pdTICKS_TO_MS((finish - start)) / 1000;
-                if (progress_sec > MS_TO_SEC(TRACK->duration_ms)) {
+                progress_ms = progress_base + pdTICKS_TO_MS(finish - start);
+                if (progress_ms > TRACK->duration_ms) {
+                    progress_ms = TRACK->duration_ms;
                     ESP_LOGW(TAG, "End of track, unblock playing task");
                     vTaskDelay(50);
                     UNBLOCK_PLAYING_TASK;
@@ -259,27 +253,25 @@ static void now_playing_page(u8g2_t* u8g2)
                 }
                 break;
             case paused:
-                progress_sec = pr;
+                progress_ms = progress_base;
                 break;
             case toBePaused:
-                ESP_LOGW(TAG, "EARLY PAUSE");
                 track_state = paused;
-                pr = progress_sec;
+                progress_base = progress_ms;
                 break;
             case toBeUnpaused:
-                ESP_LOGW(TAG, "EARLY UNPAUSE");
                 track_state = playing;
                 start = xTaskGetTickCount();
                 break;
             default:
                 break;
             }
-            strcpy(m_str, u8x8_u8toa(progress_sec / 60, 2));
+            strcpy(mins, u8x8_u8toa(progress_ms / 60000, 2));
 
-            if (progress_sec != last_progress) { /* seconds incremented */
-                last_progress = progress_sec;
-                strcpy(s_str, u8x8_u8toa(progress_sec % 60, 2));
-                ESP_LOGI(TAG, "Time: %s:%s", m_str, s_str);
+            if ((progress_ms / 1000) != (last_progress / 1000)) { /* to detect second increment */
+                last_progress = progress_ms;
+                strcpy(secs, u8x8_u8toa((progress_ms / 1000) % 60, 2));
+                ESP_LOGI(TAG, "Time: %s:%s", mins, secs);
             }
         }
 
@@ -296,28 +288,27 @@ static void now_playing_page(u8g2_t* u8g2)
             x += track_width;
         } while (x < u8g2->width);
 
+        offset -= 1; // scroll by one pixel
+        if ((u8g2_uint_t)offset < (u8g2_uint_t)-track_width) {
+            offset = 0; // start over again
+        }
         /* Artists */
         /* IMPLEMENT */
 
         /* Time progress */
         u8g2_SetFont(u8g2, u8g2_font_tom_thumb_4x6_mr);
-        u8g2_DrawStr(u8g2, 0, u8g2->height, m_str);
-        u8g2_DrawStr(u8g2, u8g2_GetStrWidth(u8g2, m_str) - 1, u8g2->height, ":");
-        u8g2_DrawStr(u8g2, u8g2_GetStrWidth(u8g2, m_str) + 3, u8g2->height, s_str);
+        u8g2_DrawStr(u8g2, 0, u8g2->height, mins);
+        u8g2_DrawStr(u8g2, u8g2_GetStrWidth(u8g2, mins) - 1, u8g2->height, ":");
+        u8g2_DrawStr(u8g2, u8g2_GetStrWidth(u8g2, mins) + 3, u8g2->height, secs);
 
         /* Progress bar */
-        const uint16_t time_bar_width = u8g2->width - 20;
-        u8g2_DrawFrame(u8g2, 20, u8g2->height - 5, time_bar_width, 5);
-        float progress_percent = ((float)progress_sec) / (MS_TO_SEC(TRACK->duration_ms));
-        int   bar_width = progress_percent * time_bar_width;
-        u8g2_DrawBox(u8g2, 20, u8g2->height - 5, bar_width, 5);
+        const uint16_t max_bar_width = u8g2->width - 20;
+        u8g2_DrawFrame(u8g2, 20, u8g2->height - 5, max_bar_width, 5);
+        float progress_percent = ((float)(progress_ms)) / TRACK->duration_ms;
+        long  bar_width = progress_percent * max_bar_width;
+        u8g2_DrawBox(u8g2, 20, u8g2->height - 5, (u8g2_uint_t)bar_width, 5);
 
         u8g2_SendBuffer(u8g2);
-
-        offset -= 1; // scroll by one pixel
-        if ((u8g2_uint_t)offset < (u8g2_uint_t)-track_width) {
-            offset = 0; // start over again
-        }
     }
 }
 
