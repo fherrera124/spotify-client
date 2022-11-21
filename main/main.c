@@ -47,6 +47,6 @@ void app_main(void)
     wifi_init_sta();
 
     ESP_ERROR_CHECK(rotary_encoder_default_init(&info));
-    ESP_ERROR_CHECK(spotify_client_init(5));
-    ESP_ERROR_CHECK(display_init(5, info.queue));
+    spotify_client_init(5);
+    display_init(5, info.queue);
 }

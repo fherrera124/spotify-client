@@ -3,6 +3,7 @@
 
 #include "esp_log.h"
 #include "esp_system.h"
+#include "limits.h"
 
 #include "credentials.h"
 #include "display.h"
@@ -22,7 +23,6 @@
 #define RELEASE_LOCK(mux)   xSemaphoreGive(mux)
 #define MAX_HTTP_BUFFER     8192
 #define RETRIES_ERR_CONN    2
-#define MS_NOTIF_POLLING    10000
 
 /* -"204" on "GET /me/player" means the actual device is inactive
  * -"204" on "PUT /me/player" means playback sucessfuly transfered
@@ -48,19 +48,15 @@
     pt2 = temp
 
 /* DRY macros */
-#define CALLOC_ESP_FAIL(var, size)                 \
-    var = calloc(1, size);                         \
-    if (var == NULL) {                             \
-        ESP_LOGE(TAG, "Error allocating memmory"); \
-        return ESP_FAIL;                           \
-    }
+#define CALLOC(var, size)  \
+    var = calloc(1, size); \
+    assert((var) && "Error allocating memory")
 
-#define CALLOC_LABEL(var, size, label)             \
-    var = calloc(1, size);                         \
-    if (var == NULL) {                             \
-        ESP_LOGE(TAG, "Error allocating memmory"); \
-        goto label;                                \
-    }
+#define MALLOC(var, size) \
+    var = malloc(size);   \
+    assert((var) && "Error allocating memory")
+
+#define MAX_DEV_RETRIES 3
 
 /* Private types -------------------------------------------------------------*/
 typedef void (*handler_cb_t)(char*, esp_http_client_event_t*);
@@ -95,7 +91,6 @@ extern const char spotify_cert_pem_end[] asm("_binary_spotify_cert_pem_end");
 
 /* Private function prototypes -----------------------------------------------*/
 static esp_err_t   _validate_token();
-static inline void get_active_devices(StrList*);
 static inline void free_track(TrackInfo* track);
 static inline void handle_track_fetched(TrackInfo** new_track);
 static inline void handle_err_connection();
@@ -103,7 +98,7 @@ static esp_err_t   _http_event_handler(esp_http_client_event_t* evt);
 static void        now_playing_task(void* pvParameters);
 
 /* Exported functions --------------------------------------------------------*/
-esp_err_t spotify_client_init(UBaseType_t priority)
+void spotify_client_init(UBaseType_t priority)
 {
     esp_http_client_config_t config = {
         .url = "https://api.spotify.com/v1",
@@ -111,38 +106,28 @@ esp_err_t spotify_client_init(UBaseType_t priority)
         .cert_pem = spotify_cert_pem_start,
     };
 
-    buffer = malloc(MAX_HTTP_BUFFER);
-    if (buffer == NULL) {
-        ESP_LOGE(TAG, "Error allocating memmory for HTTP buffer");
-        return ESP_FAIL;
-    }
-
-    state.access_token = malloc(256);
-    if (state.access_token == NULL)
-        return ESP_FAIL;
+    MALLOC(buffer, MAX_HTTP_BUFFER);
+    MALLOC(state.access_token, 256);
 
     state.client = esp_http_client_init(&config);
-    if (state.client == NULL)
-        return ESP_FAIL;
+    assert(state.client && "Error on esp_http_client_init()");
 
-    CALLOC_ESP_FAIL(tokens, sizeof(*tokens));
-    CALLOC_ESP_FAIL(tokens->access_token, 1);
-    CALLOC_ESP_FAIL(TRACK, sizeof(*TRACK));
-    CALLOC_ESP_FAIL(TRACK->name, 1);
-    CALLOC_ESP_FAIL(TRACK->artists, sizeof(*TRACK->artists));
-    CALLOC_ESP_FAIL(TRACK->device, sizeof(*TRACK->device));
+    CALLOC(tokens, sizeof(*tokens));
+    CALLOC(tokens->access_token, 1);
+    CALLOC(TRACK, sizeof(*TRACK));
+    CALLOC(TRACK->name, 1);
+    CALLOC(TRACK->artists, sizeof(*TRACK->artists));
+    CALLOC(TRACK->device, sizeof(*TRACK->device));
 
     client_lock = xSemaphoreCreateMutex();
-    if (client_lock == NULL)
-        return ESP_FAIL;
+    assert(client_lock && "Error on xSemaphoreCreateMutex()");
 
     state.handler_cb = default_event_handler;
 
     init_functions_cb();
 
     int res = xTaskCreate(now_playing_task, "now_playing_task", 4096, NULL, priority, &PLAYING_TASK);
-
-    return res == pdPASS ? ESP_OK : ESP_FAIL;
+    assert((res == pdPASS) && "Error creating task");
 }
 
 void player_cmd(rotary_encoder_event_t* event)
@@ -233,6 +218,69 @@ void http_user_playlists()
     } */
 }
 
+void http_available_devices()
+{
+    ACQUIRE_LOCK(client_lock);
+    _validate_token();
+    state.handler_cb = default_event_handler;
+    state.endpoint = PLAYERURL(PLAYER "/devices");
+    state.method = HTTP_METHOD_GET;
+    PREPARE_CLIENT(state, state.access_token, "application/json");
+
+    state.err = esp_http_client_perform(state.client);
+    state.status_code = esp_http_client_get_status_code(state.client);
+    esp_http_client_set_post_field(state.client, NULL, 0);
+
+    ESP_LOGW(TAG, "Active devices:\n%s", buffer);
+
+    esp_err_t err = parse_available_devices(buffer);
+
+    RELEASE_LOCK(client_lock);
+    if (ESP_OK == err) {
+        NOTIFY_DISPLAY(ACTIVE_DEVICES_FOUND);
+    } else {
+        free(DEVICES->items_string);
+        strListClear(DEVICES->values);
+        free(DEVICES->values);
+        DEVICES->items_string = NULL;
+        DEVICES->values = NULL;
+        NOTIFY_DISPLAY(NO_ACTIVE_DEVICES);
+    }
+}
+
+void http_set_device(const char* dev_id)
+{
+    char* buf = NULL;
+    MALLOC(buf, 33 + strlen(dev_id));
+    sprintf(buf, "{\"device_ids\":[\"%s\"],\"play\":true}", dev_id); // TODO: true if now playing, else false
+
+    ACQUIRE_LOCK(client_lock);
+    _validate_token();
+    state.handler_cb = default_event_handler;
+    state.method = HTTP_METHOD_PUT;
+    state.endpoint = PLAYERURL(PLAYER);
+    esp_http_client_set_post_field(state.client, buf, strlen(buf));
+
+    PREPARE_CLIENT(state, state.access_token, "application/json");
+
+    state.err = esp_http_client_perform(state.client);
+    state.status_code = esp_http_client_get_status_code(state.client);
+    esp_http_client_set_post_field(state.client, NULL, 0); /* Clear post field */
+    free(buf);
+    if (state.err == ESP_OK) {
+        if (PLAYBACK_TRANSFERED(state)) {
+            ESP_LOGI(TAG, "Playback transfered to: %s", dev_id);
+            NOTIFY_DISPLAY(PLAYBACK_TRANSFERRED_OK);
+        } else {
+            NOTIFY_DISPLAY(PLAYBACK_TRANSFERRED_FAIL);
+        }
+    } else {
+        ESP_LOGE(TAG, "Error STATUS_CODE: %d", state.status_code);
+        NOTIFY_DISPLAY(PLAYBACK_TRANSFERRED_FAIL);
+    }
+    RELEASE_LOCK(client_lock);
+}
+
 void http_play_context_uri(const char* uri)
 {
     char* buf = malloc(19 + strlen(uri));
@@ -281,45 +329,17 @@ static esp_err_t _validate_token()
         ESP_LOGE(TAG, "The answer was:\n%s", buffer);
         return ESP_FAIL;
     }
-    if (tokenAllParsed != parseTokens(buffer, tokens)) {
-        free(tokens->access_token); // unnecesary at the moment
-        ESP_LOGE(TAG, "Error trying parse token from:\n%s", buffer);
-        return ESP_FAIL;
-    }
+    parseTokens(buffer, tokens);
     strcpy(state.access_token, "Bearer ");
     strcat(state.access_token, tokens->access_token);
     ESP_LOGW(TAG, "Access Token obtained:\n%s", tokens->access_token);
     return ESP_OK;
 }
 
-static inline void get_active_devices(StrList* devices)
-{
-    /* client_lock lock already must be aquired */
-
-    state.endpoint = PLAYERURL(PLAYER "/devices");
-    state.method = HTTP_METHOD_GET;
-    _validate_token();
-    PREPARE_CLIENT(state, state.access_token, "application/json");
-
-    state.err = esp_http_client_perform(state.client);
-    state.status_code = esp_http_client_get_status_code(state.client);
-    esp_http_client_set_post_field(state.client, NULL, 0);
-
-    ESP_LOGW(TAG, "Active devices:\n%s", buffer);
-
-    available_devices(buffer, devices);
-}
-
 static inline void handle_track_fetched(TrackInfo** new_track)
 {
-    int val = parseTrackInfo(buffer, *new_track);
+    parseTrackInfo(buffer, *new_track);
 
-    if (trackAllParsed != val) {
-        ESP_LOGE(TAG, "Error parsing TRACK. Flags parsed: %x", val);
-        ESP_LOGE(TAG, "\n%s", buffer);
-        free_track(*new_track);
-        return;
-    }
     if (0 == strcmp(TRACK->name, (*new_track)->name)) {
         /* same track */
         TRACK->progress_ms = (*new_track)->progress_ms;
@@ -360,27 +380,39 @@ static esp_err_t _http_event_handler(esp_http_client_event_t* evt)
 
 static void now_playing_task(void* pvParameters)
 {
-    bool on_try_current_dev = false;
+    bool first_try = true;
 
     char* buf = NULL;
 
     TrackInfo* new_track;
-    CALLOC_LABEL(new_track, sizeof(*new_track), abort);
-    CALLOC_LABEL(new_track->name, 1, abort);
-    CALLOC_LABEL(new_track->device, sizeof(*new_track->device), abort);
-    CALLOC_LABEL(new_track->artists, sizeof(*new_track->artists), abort);
+    CALLOC(new_track, sizeof(*new_track));
+    CALLOC(new_track->name, 1);
+    CALLOC(new_track->device, sizeof(*new_track->device));
+    CALLOC(new_track->artists, sizeof(*new_track->artists));
 
-    static uint32_t notif;
+    uint32_t notif;
+    bool     enabled = false;
 
     while (1) {
         xTaskNotifyWait(
             pdFALSE, /* bits to clear on entry (if there are no pending notifications) */
-            pdFALSE, /* bits to clear on exit (if there are pending notifications) */
+            ULONG_MAX, /* bits to clear on exit (if there are pending notifications) */
             &notif, /* Stores the notified value */
             pdMS_TO_TICKS(MS_NOTIF_POLLING) /* xTicksToWait */
         );
 
-        if (notif != TASK_ENABLED)
+        switch (notif) {
+        case TASK_ENABLED:
+            enabled = true;
+            break;
+        case TASK_DISABLED:
+            enabled = false;
+            break;
+        default:
+            break;
+        }
+
+        if (!enabled)
             continue;
 
         ACQUIRE_LOCK(client_lock);
@@ -392,7 +424,7 @@ static void now_playing_task(void* pvParameters)
     prepare:
         PREPARE_CLIENT(state, state.access_token, "application/json");
 
-    retry:;
+    retry:
         state.err = esp_http_client_perform(state.client);
         state.status_code = esp_http_client_get_status_code(state.client);
         esp_http_client_set_post_field(state.client, NULL, 0); /* Clear post field */
@@ -408,33 +440,17 @@ static void now_playing_task(void* pvParameters)
                 goto prepare;
             }
             if (DEVICE_INACTIVE(state)) { /* Playback not available or active */
-                if (!on_try_current_dev && TRACK->device->id) {
-                    on_try_current_dev = true;
-
-                    buf = malloc(33 + strlen(TRACK->device->id)); // TODO: validate
+                ESP_LOGW(TAG, "Device inactive");
+                if (first_try && TRACK->device->id) {
+                    first_try = false;
+                    MALLOC(buf, 33 + strlen(TRACK->device->id));
                     sprintf(buf, "{\"device_ids\":[\"%s\"],\"play\":false}", TRACK->device->id);
                     ESP_LOGW(TAG, "Device to transfer playback: %s", TRACK->device->id);
                 } else {
                     ESP_LOGW(TAG, "Failed connecting with last device");
-
-                    StrList* devices;
-                    CALLOC_LABEL(devices, sizeof(*devices), exit);
-                    get_active_devices(devices);
-
-                    // TODO: Here we should search for track->device->id
-                    StrListItem* dev = devices->first; // pick the first device on the list
-
-                    if (dev == NULL) {
-                        ESP_LOGE(TAG, "No devices found :c");
-                        free(devices);
-                        goto exit;
-                    }
-                    buf = malloc(33 + strlen(dev->str)); // TODO: validate
-                    sprintf(buf, "{\"device_ids\":[\"%s\"],\"play\":false}", dev->str);
-                    free(TRACK->device->id);
-                    TRACK->device->id = strdup(dev->str);
-                    strListClear(devices);
-                    free(devices);
+                    first_try = true;
+                    NOTIFY_DISPLAY(LAST_DEVICE_FAILED);
+                    goto exit;
                 }
 
                 _validate_token();
@@ -446,7 +462,7 @@ static void now_playing_task(void* pvParameters)
             }
             if (PLAYBACK_TRANSFERED(state)) {
                 ESP_LOGI(TAG, "Playback transfered to: %s", TRACK->device->id);
-                on_try_current_dev = false;
+                first_try = true;
                 goto exit;
             }
             /* Unhandled status_code follows */
@@ -474,11 +490,7 @@ static void now_playing_task(void* pvParameters)
         ESP_LOGD(TAG, "[NOW_PLAYING]: minimum free heap size: %d", esp_get_minimum_free_heap_size());
         ESP_LOGD(TAG, "[NOW_PLAYING]: free heap size: %d", esp_get_free_heap_size());
     }
-abort:
-    free(buf);
-    free_track(new_track);
-    free(new_track);
-    vTaskDelete(NULL);
+    assert(false && "Unexpected exit of infinite task loop");
 }
 
 static inline void free_track(TrackInfo* track)

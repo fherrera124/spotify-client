@@ -1,31 +1,16 @@
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Includes ------------------------------------------------------------------*/
 #include <stdbool.h>
 #include <time.h>
 
 #include "strlib.h"
 
-typedef enum {
-    nameParsed = 0x01,
-    artistParsed = 0x02,
-    albumParsed = 0x04,
-    durationParsed = 0x08,
-    progressParsed = 0x10,
-    isPlayingParsed = 0x20,
-    deviceParsed = 0x40,
-    trackAllParsed = nameParsed | artistParsed | albumParsed
-        | isPlayingParsed | deviceParsed
-        | durationParsed | progressParsed
-
-} TrackParsed;
-
-typedef enum {
-    accessTokenParsed = 0x01,
-    // refreshTokenParsed = 0x02,
-    expiresInParsed = 0x04,
-    tokenAllParsed = accessTokenParsed | expiresInParsed // | refreshTokenParsed
-
-} TokensParsed;
+/* Exported types ------------------------------------------------------------*/
 
 typedef struct
 {
@@ -38,27 +23,39 @@ typedef struct
 
 typedef struct
 {
-    char*       name;
-    StrList*    artists;
-    char*       album;
-    time_t      duration_ms;
-    time_t      progress_ms;
-    bool        isPlaying : 1;
-    Device*     device;
-    TrackParsed parsed;
+    char*    name;
+    StrList* artists;
+    char*    album;
+    time_t   duration_ms;
+    time_t   progress_ms;
+    bool     isPlaying : 1;
+    Device*  device;
 } TrackInfo;
 
 typedef struct
 {
-    // char     *refreshToken;
-    // char     *authToken;
-    char*        access_token;
-    time_t       expiresIn;
-    TokensParsed parsed;
+    // char*  refreshToken;
+    // char*  authToken;
+    char*  access_token;
+    time_t expiresIn;
 } Tokens;
 
-void init_functions_cb(void);
+typedef struct {
+    char*    items_string;
+    StrList* values;
+} u8g2_items_list_t;
 
-TrackParsed  parseTrackInfo(const char* js, TrackInfo* track);
-TokensParsed parseTokens(const char* js, Tokens* tokens);
-void         available_devices(const char* js, StrList* device_list);
+/* Globally scoped variables declarations ------------------------------------*/
+extern u8g2_items_list_t* PLAYLISTS;
+extern u8g2_items_list_t* DEVICES;
+
+/* Exported functions prototypes ---------------------------------------------*/
+void      init_functions_cb(void);
+void      parseTrackInfo(const char* js, TrackInfo* track);
+void      parseTokens(const char* js, Tokens* tokens);
+void      display_parse_playlist(const char* js, int output_len);
+esp_err_t parse_available_devices(const char* js);
+
+#ifdef __cplusplus
+}
+#endif

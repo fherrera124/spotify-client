@@ -7,7 +7,16 @@
 #include "strlib.h"
 #include "u8g2_esp8266_hal.h"
 
+#include "selection_list.h"
+
 /* Private macro -------------------------------------------------------------*/
+#define TICKSTOWAIT pdMS_TO_TICKS(50)
+
+#define DRAW_STR(u8g2, x, y, font, str) \
+    u8g2_ClearBuffer(u8g2);             \
+    u8g2_SetFont(u8g2, font);           \
+    u8g2_DrawStr(u8g2, x, y, str);      \
+    u8g2_SendBuffer(u8g2)
 
 /* Private types -------------------------------------------------------------*/
 
@@ -16,31 +25,23 @@ static void setup_display(u8g2_t* u8g2);
 static void display_task(void* arg);
 static void initial_menu_page(u8g2_t* u8g2);
 static void now_playing_page(u8g2_t* u8g2);
-static void track_menu_context(u8g2_t* u8g2);
+static void now_playing_context_menu(u8g2_t* u8g2);
 static void playlists_page(u8g2_t* u8g2);
+static void available_devices_page(u8g2_t* u8g2);
 
 /* Locally scoped variables --------------------------------------------------*/
-QueueHandle_t encoder_queue_hlr;
-const char*   TAG = "DISPLAY";
+QueueHandle_t      encoder_queue_hlr;
+static const char* TAG = "DISPLAY";
 
 /* Globally scoped variables definitions -------------------------------------*/
-TaskHandle_t MENU_TASK = NULL;
-Playlists_t* PLAYLISTS = NULL;
-
-/* Imported function prototypes ----------------------------------------------*/
-uint8_t userInterfaceSelectionList(u8g2_t* u8g2, QueueHandle_t queue,
-    const char* title, uint8_t start_pos,
-    const char* sl);
+TaskHandle_t DISPLAY_TASK = NULL;
 
 /* Exported functions --------------------------------------------------------*/
-esp_err_t display_init(UBaseType_t priority, QueueHandle_t encoder_q_hlr)
+void display_init(UBaseType_t priority, QueueHandle_t encoder_q_hlr)
 {
-    assert(PLAYING_TASK);
-
     encoder_queue_hlr = encoder_q_hlr;
-    if (pdPASS == xTaskCreate(display_task, "display_task", 4096, NULL, priority, &MENU_TASK))
-        return ESP_OK;
-    return ESP_FAIL;
+    int res = xTaskCreate(display_task, "display_task", 4096, NULL, priority, &DISPLAY_TASK);
+    assert((res == pdPASS) && "Error creating task");
 }
 
 /* Private functions ---------------------------------------------------------*/
@@ -80,10 +81,11 @@ static void initial_menu_page(u8g2_t* u8g2)
     do {
         selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
             "Spotify", selection,
-            "Available devices\nNow playing\nMy playlists");
+            "Available devices\nNow playing\nMy playlists",
+            portMAX_DELAY);
         switch (selection) {
         case 1:
-            break;
+            return available_devices_page(u8g2);
         case 2:
             return now_playing_page(u8g2);
         case 3:
@@ -96,59 +98,54 @@ static void initial_menu_page(u8g2_t* u8g2)
 
 static void playlists_page(u8g2_t* u8g2)
 {
-    u8g2_ClearBuffer(u8g2);
-    u8g2_SetFont(u8g2, u8g2_font_tom_thumb_4x6_mr);
-    u8g2_DrawStr(u8g2, 10, 20, "Retrieving user playlists...");
-    u8g2_SendBuffer(u8g2);
+    DRAW_STR(u8g2, 0, 20, u8g2_font_tom_thumb_4x6_mr, "Retrieving user playlists...");
 
     uint8_t selection = 1;
 
     assert(PLAYLISTS == NULL);
 
     PLAYLISTS = calloc(1, sizeof(*PLAYLISTS));
-    assert(PLAYLISTS);
+    assert(PLAYLISTS && "Error allocating memory");
 
-    PLAYLISTS->uris = calloc(1, sizeof(*PLAYLISTS->uris));
-    assert(PLAYLISTS->uris);
+    PLAYLISTS->values = calloc(1, sizeof(*PLAYLISTS->values));
+    assert(PLAYLISTS->values && "Error allocating memory");
 
     http_user_playlists();
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    uint32_t notif;
+    xTaskNotifyWait(0, ULONG_MAX, &notif, portMAX_DELAY);
 
-    if (!PLAYLISTS->name_list || !PLAYLISTS->uris) {
-        u8g2_ClearBuffer(u8g2);
-        u8g2_DrawStr(u8g2, 0, 20, "Error getting playlists");
-        u8g2_SendBuffer(u8g2);
+    if (notif == PLAYLISTS_EMPTY) {
+        DRAW_STR(u8g2, 0, 20, u8g2_font_tom_thumb_4x6_mr, "User doesn't have playlists");
         vTaskDelay(pdMS_TO_TICKS(3000));
-        goto quit;
+    } else if (notif == PLAYLISTS_OK) {
+        u8g2_ClearBuffer(u8g2);
+        u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
+        selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
+            "My Playlists", selection,
+            PLAYLISTS->items_string,
+            portMAX_DELAY);
+
+        StrListItem* uri = PLAYLISTS->values->first;
+
+        for (uint16_t i = 1; i < selection; i++) {
+            uri = uri->next;
+        }
+
+        ESP_LOGI(TAG, "URI: %s", uri->str);
+
+        http_play_context_uri(uri->str);
+        vTaskDelay(50);
+        UNBLOCK_PLAYING_TASK;
     }
-
-    u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
-    selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
-        "My Playlists", selection,
-        PLAYLISTS->name_list);
-
-    assert(selection <= PLAYLISTS->uris->count);
-
-    StrListItem* uri = PLAYLISTS->uris->first;
-
-    for (uint16_t i = 1; i < selection; i++) {
-        uri = uri->next;
+    /* cleanup */
+    if (PLAYLISTS->items_string) {
+        free(PLAYLISTS->items_string);
+        PLAYLISTS->items_string = NULL;
     }
-
-    ESP_LOGI(TAG, "URI: %s", uri->str);
-
-    http_play_context_uri(uri->str);
-    vTaskDelay(50);
-    UNBLOCK_PLAYING_TASK;
-
-quit:
-    if (PLAYLISTS->name_list) {
-        free(PLAYLISTS->name_list);
-        PLAYLISTS->name_list = NULL;
-    }
-    if (PLAYLISTS->uris) {
-        strListClear(PLAYLISTS->uris);
-        free(PLAYLISTS->uris);
+    if (PLAYLISTS->values) {
+        strListClear(PLAYLISTS->values);
+        free(PLAYLISTS->values);
+        PLAYLISTS->values = NULL;
     }
     free(PLAYLISTS);
     PLAYLISTS = NULL;
@@ -159,15 +156,21 @@ quit:
 static void now_playing_page(u8g2_t* u8g2)
 {
     ENABLE_PLAYING_TASK;
-
-    u8g2_ClearBuffer(u8g2);
-    u8g2_SetFont(u8g2, u8g2_font_tom_thumb_4x6_mr);
-    u8g2_DrawStr(u8g2, 10, 20, "Retrieving player state...");
-    u8g2_SendBuffer(u8g2);
+    DRAW_STR(u8g2, 0, 20, u8g2_font_tom_thumb_4x6_mr, "Retrieving player state...");
 
     /* wait for the current track */
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    assert(TRACK);
+
+    uint32_t notif;
+    xTaskNotifyWait(0, ULONG_MAX, &notif, portMAX_DELAY);
+
+    if (notif == LAST_DEVICE_FAILED) {
+        DISABLE_PLAYING_TASK;
+        ESP_LOGD(TAG, "No device playing");
+        DRAW_STR(u8g2, 0, 20, u8g2_font_tom_thumb_4x6_mr, "No device playing");
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        return available_devices_page(u8g2);
+    }
+    // else...
     u8g2_SetFont(u8g2, u8g2_font_helvB18_tr);
     u8g2_uint_t track_width = 10 + u8g2_GetStrWidth(u8g2, TRACK->name);
     u8g2_uint_t offset = 0, x = 0;
@@ -191,7 +194,6 @@ static void now_playing_page(u8g2_t* u8g2)
         /* Intercept any encoder event -----------------------------------------------*/
 
         rotary_encoder_event_t queue_event;
-
         if (pdTRUE == xQueueReceive(encoder_queue_hlr, &queue_event, 0)) {
             if (queue_event.event_type == BUTTON_EVENT) {
                 switch (queue_event.btn_event) {
@@ -201,7 +203,7 @@ static void now_playing_page(u8g2_t* u8g2)
                     break;
                 case MEDIUM_PRESS:
                     DISABLE_PLAYING_TASK;
-                    return track_menu_context(u8g2);
+                    return now_playing_context_menu(u8g2);
                     break;
                 case LONG_PRESS:
                     DISABLE_PLAYING_TASK;
@@ -220,36 +222,49 @@ static void now_playing_page(u8g2_t* u8g2)
         }
 
         /* Wait for track event ------------------------------------------------------*/
-        uint32_t notif;
-        if (pdPASS == xTaskNotifyWait(0, ULONG_MAX, &notif, pdMS_TO_TICKS(50))) {
+
+        if (pdPASS == xTaskNotifyWait(0, ULONG_MAX, &notif, TICKSTOWAIT)) {
+            start = xTaskGetTickCount();
             progress_base = TRACK->progress_ms;
 
-            if ((notif & SAME_TRACK) != 0) {
+            if (notif == SAME_TRACK) {
                 ESP_LOGW(TAG, "Same track event");
-            } else if ((notif & NEW_TRACK) != 0) {
+            } else if (notif == NEW_TRACK) {
                 ESP_LOGW(TAG, "New track event");
                 last_progress = offset = 0;
                 u8g2_SetFont(u8g2, u8g2_font_helvB18_tr);
                 track_width = 20 + u8g2_GetStrWidth(u8g2, TRACK->name);
+            } else if (notif == LAST_DEVICE_FAILED) {
+                DISABLE_PLAYING_TASK;
+                ESP_LOGW(TAG, "Last device failed");
+                DRAW_STR(u8g2, 0, 20, u8g2_font_tom_thumb_4x6_mr, "Device disconected...");
+                vTaskDelay(pdMS_TO_TICKS(3000));
+                return available_devices_page(u8g2);
             }
-            if (TRACK->isPlaying) {
-                start = xTaskGetTickCount();
-                track_state = playing;
-            } else {
-                track_state = paused;
+
+            track_state = TRACK->isPlaying ? playing : paused;
+
+        } else { /* TICKSTOWAIT expired */
+            TickType_t finish = xTaskGetTickCount();
+            if (pdTICKS_TO_MS(finish - start) > (MS_NOTIF_POLLING + 5000)) {
+                ESP_LOGW(TAG, "Timeout waiting for track notification");
+                DISABLE_PLAYING_TASK;
+                return available_devices_page(u8g2);
             }
-        } else { /* xTicksToWait expired */
             switch (track_state) {
             case playing:;
-                TickType_t finish = xTaskGetTickCount();
-
-                progress_ms = progress_base + pdTICKS_TO_MS(finish - start);
-                if (progress_ms > TRACK->duration_ms) {
-                    progress_ms = TRACK->duration_ms;
-                    ESP_LOGW(TAG, "End of track, unblock playing task");
-                    vTaskDelay(50);
-                    UNBLOCK_PLAYING_TASK;
-                    continue;
+                time_t prg = progress_base + pdTICKS_TO_MS(finish - start);
+                /* track finished, early unblock of playlist task */
+                if (prg > TRACK->duration_ms) {
+                    /* only notify once */
+                    if (progress_ms != TRACK->duration_ms) {
+                        progress_ms = TRACK->duration_ms;
+                        vTaskDelay(50);
+                        ESP_LOGW(TAG, "End of track, unblock playing task");
+                        UNBLOCK_PLAYING_TASK;
+                    }
+                } else {
+                    progress_ms = prg;
                 }
                 break;
             case paused:
@@ -267,8 +282,8 @@ static void now_playing_page(u8g2_t* u8g2)
                 break;
             }
             strcpy(mins, u8x8_u8toa(progress_ms / 60000, 2));
-
-            if ((progress_ms / 1000) != (last_progress / 1000)) { /* to detect second increment */
+            /* detect a second increment */
+            if ((progress_ms / 1000) != (last_progress / 1000)) {
                 last_progress = progress_ms;
                 strcpy(secs, u8x8_u8toa((progress_ms / 1000) % 60, 2));
                 ESP_LOGI(TAG, "Time: %s:%s", mins, secs);
@@ -312,7 +327,7 @@ static void now_playing_page(u8g2_t* u8g2)
     }
 }
 
-static void track_menu_context(u8g2_t* u8g2)
+static void now_playing_context_menu(u8g2_t* u8g2)
 {
     uint8_t selection = 1;
 
@@ -323,7 +338,7 @@ static void track_menu_context(u8g2_t* u8g2)
     do {
         selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
             "Track options", selection,
-            sl);
+            sl, portMAX_DELAY);
         switch (selection) {
         case 1:
             /* code */
@@ -340,4 +355,73 @@ static void track_menu_context(u8g2_t* u8g2)
         }
 
     } while (1);
+}
+
+static void available_devices_page(u8g2_t* u8g2)
+{
+    DRAW_STR(u8g2, 0, 20, u8g2_font_tom_thumb_4x6_mr, "Retrieving available devices...");
+    uint8_t selection;
+update_list:
+    selection = 1;
+
+    DEVICES = calloc(1, sizeof(*DEVICES));
+    assert(DEVICES && "Error allocating memory for DEVICES");
+
+    DEVICES->values = calloc(1, sizeof(*DEVICES->values));
+    assert(DEVICES->values && "Error allocating memory for DEVICES->values");
+
+    http_available_devices();
+    uint32_t notif;
+    xTaskNotifyWait(0, ULONG_MAX, &notif, portMAX_DELAY);
+
+    if (notif == ACTIVE_DEVICES_FOUND) {
+        u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
+        selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
+            "Select a device", selection,
+            DEVICES->items_string,
+            pdMS_TO_TICKS(10000));
+
+        if (selection == MENU_EVENT_TIMEOUT)
+            goto cleanup;
+
+        StrListItem* device = DEVICES->values->first;
+
+        for (uint16_t i = 1; i < selection; i++) {
+            device = device->next;
+        }
+
+        ESP_LOGI(TAG, "DEVICE ID: %s", device->str);
+
+        http_set_device(device->str);
+        u8g2_SetFont(u8g2, u8g2_font_tom_thumb_4x6_mr);
+        xTaskNotifyWait(0, ULONG_MAX, &notif, portMAX_DELAY);
+        u8g2_ClearBuffer(u8g2);
+
+        if (notif == PLAYBACK_TRANSFERRED_OK) {
+            u8g2_DrawStr(u8g2, 0, 20, "Playback transferred to device");
+        } else if (notif == PLAYBACK_TRANSFERRED_FAIL) {
+            u8g2_DrawStr(u8g2, 0, 20, "Device failed");
+        }
+        u8g2_SendBuffer(u8g2);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+
+    } else if (notif == NO_ACTIVE_DEVICES) {
+        DRAW_STR(u8g2, 0, 20, u8g2_font_tom_thumb_4x6_mr, "No devices found :c");
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+cleanup:
+    if (DEVICES->items_string) {
+        free(DEVICES->items_string);
+        DEVICES->items_string = NULL;
+    }
+    if (DEVICES->values) {
+        strListClear(DEVICES->values);
+        free(DEVICES->values);
+    }
+    free(DEVICES);
+    DEVICES = NULL;
+
+    if (selection == MENU_EVENT_TIMEOUT)
+        goto update_list;
+    return now_playing_page(u8g2); // TODO: make dynamic
 }

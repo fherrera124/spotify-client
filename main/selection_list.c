@@ -49,6 +49,8 @@
 #include "rotary_encoder.h"
 #include "u8g2.h"
 
+#include "selection_list.h"
+
 /* Private macro -------------------------------------------------------------*/
 #define MY_BORDER_SIZE 1
 
@@ -56,10 +58,10 @@
 void u8g2_DrawSelectionList(u8g2_t* u8g2, u8sl_t* u8sl, u8g2_uint_t y, const char* s);
 
 /* Private function prototypes -----------------------------------------------*/
-uint8_t getMenuEvent(QueueHandle_t queue);
+uint8_t getMenuEvent(QueueHandle_t queue, TickType_t ticks_timeout);
 
 /* Private variables ---------------------------------------------------------*/
-const char* TAG2 = "selection_list";
+static const char* TAG = "selection_list";
 
 /* Exported functions --------------------------------------------------------*/
 
@@ -82,7 +84,7 @@ const char* TAG2 = "selection_list";
  * @retval - The selected line if user has pressed the select key
  */
 uint8_t userInterfaceSelectionList(u8g2_t* u8g2, QueueHandle_t queue,
-    const char* title, uint8_t start_pos, const char* sl)
+    const char* title, uint8_t start_pos, const char* sl, TickType_t ticks_timeout)
 {
     u8sl_t      u8sl;
     u8g2_uint_t yy;
@@ -136,7 +138,7 @@ uint8_t userInterfaceSelectionList(u8g2_t* u8g2, QueueHandle_t queue,
 #endif
 
         for (;;) {
-            event = getMenuEvent(queue);
+            event = getMenuEvent(queue, ticks_timeout);
             if (event == U8X8_MSG_GPIO_MENU_SELECT)
                 return u8sl.current_pos + 1; /* +1, issue 112 */
             else if (event == U8X8_MSG_GPIO_MENU_HOME)
@@ -147,17 +149,19 @@ uint8_t userInterfaceSelectionList(u8g2_t* u8g2, QueueHandle_t queue,
             } else if (event == U8X8_MSG_GPIO_MENU_PREV || event == U8X8_MSG_GPIO_MENU_UP) {
                 u8sl_Prev(&u8sl);
                 break;
+            } else if (event == MENU_EVENT_TIMEOUT) {
+                return MENU_EVENT_TIMEOUT;
             }
         }
     }
 }
 
 /* Private functions ---------------------------------------------------------*/
-uint8_t getMenuEvent(QueueHandle_t queue)
+uint8_t getMenuEvent(QueueHandle_t queue, TickType_t ticks_timeout)
 {
     rotary_encoder_event_t queue_event = { 0 };
 
-    if (pdTRUE == xQueueReceive(queue, &queue_event, portMAX_DELAY)) {
+    if (pdTRUE == xQueueReceive(queue, &queue_event, ticks_timeout)) {
         if (queue_event.event_type == BUTTON_EVENT) {
             switch (queue_event.btn_event) {
             case SHORT_PRESS:
@@ -173,6 +177,9 @@ uint8_t getMenuEvent(QueueHandle_t queue)
                 ? U8X8_MSG_GPIO_MENU_NEXT
                 : U8X8_MSG_GPIO_MENU_PREV;
         }
+    } else { /* timeout */
+        ESP_LOGW(TAG, "timeout waiting for an option");
+        return MENU_EVENT_TIMEOUT;
     }
     return 0; /* invalid message, no event */
 }

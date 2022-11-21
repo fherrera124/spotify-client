@@ -1,13 +1,17 @@
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Includes ------------------------------------------------------------------*/
 #include "esp_http_client.h"
-#include "jsmn.h"
 #include "strlib.h"
 
-typedef struct {
-    char*    name_list;
-    StrList* uris;
-} Playlists_t;
-
+/* Exported functions prototypes ---------------------------------------------*/
 void default_event_handler(char* buffer, esp_http_client_event_t* evt);
 void playlists_handler(char* buffer, esp_http_client_event_t* evt);
+
+#ifdef __cplusplus
+}
+#endif

@@ -28,7 +28,7 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 typedef enum {
     TASK_ENABLED = 1,
-    TASK_DISABLED
+    TASK_DISABLED,
 } nowPlayingAction;
 
 typedef enum {
@@ -37,21 +37,38 @@ typedef enum {
     cmdNext,
 } Player_cmd_t;
 
+typedef enum {
+    NEW_TRACK = 1,
+    SAME_TRACK,
+    PLAYBACK_TRANSFERRED_OK,
+    PLAYBACK_TRANSFERRED_FAIL,
+    ACTIVE_DEVICES_FOUND,
+    NO_ACTIVE_DEVICES,
+    LAST_DEVICE_FAILED,
+    PLAYLISTS_EMPTY,
+    PLAYLISTS_OK,
+} spotify_client_event_t;
+
 /* Exported variables declarations -------------------------------------------*/
-extern TaskHandle_t  PLAYING_TASK;
-extern TrackInfo*    TRACK;
+extern TaskHandle_t PLAYING_TASK;
+extern TrackInfo*   TRACK;
 
 /* Exported macro ------------------------------------------------------------*/
 #define ENABLE_PLAYING_TASK  xTaskNotify(PLAYING_TASK, TASK_ENABLED, eSetValueWithOverwrite)
 #define DISABLE_PLAYING_TASK xTaskNotify(PLAYING_TASK, TASK_DISABLED, eSetValueWithOverwrite)
+#define GO_CHECK_DEVICE      xTaskNotify(PLAYING_TASK, CHECK_DEVICE, eSetValueWithOverwrite)
 /* unblock task without updating its notify value */
 #define UNBLOCK_PLAYING_TASK xTaskNotify(PLAYING_TASK, pdFALSE, eNoAction)
+/* ms to wait to fetch current track */
+#define MS_NOTIF_POLLING 10000
 
 /* Exported functions prototypes ---------------------------------------------*/
-esp_err_t spotify_client_init(UBaseType_t priority);
-void      player_cmd(rotary_encoder_event_t* event);
-void      http_user_playlists();
-void      http_play_context_uri(const char* uri);
+void spotify_client_init(UBaseType_t priority);
+void player_cmd(rotary_encoder_event_t* event);
+void http_user_playlists();
+void http_available_devices();
+void http_play_context_uri(const char* uri);
+void http_set_device(const char* dev_id);
 
 #ifdef __cplusplus
 }

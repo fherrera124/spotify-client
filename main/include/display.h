@@ -23,21 +23,15 @@ extern "C" {
 #include "handler_callbacks.h"
 
 /* Exported types ------------------------------------------------------------*/
-typedef enum {
-    NEW_TRACK = 1,
-    SAME_TRACK = 2,
-    PAUSED = 4,
-} Menu_event_t;
 
 /* Globally scoped variables declarations ------------------------------------*/
-extern TaskHandle_t MENU_TASK;
-extern Playlists_t* PLAYLISTS; // maybe should be defined in handler_calbacks.c, instead of display.c
+extern TaskHandle_t DISPLAY_TASK;
 
 /* Exported macro ------------------------------------------------------------*/
-#define NOTIFY_DISPLAY(event) xTaskNotify(MENU_TASK, event, eSetBits)
+#define NOTIFY_DISPLAY(event) xTaskNotify(DISPLAY_TASK, event, eSetBits)
 
 /* Exported functions prototypes ---------------------------------------------*/
-esp_err_t display_init(UBaseType_t priority, QueueHandle_t encoder_q_hlr);
+void display_init(UBaseType_t priority, QueueHandle_t encoder_q_hlr);
 
 #ifdef __cplusplus
 }
