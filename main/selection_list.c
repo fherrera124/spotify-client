@@ -61,7 +61,6 @@ void u8g2_DrawSelectionList(u8g2_t* u8g2, u8sl_t* u8sl, u8g2_uint_t y, const cha
 uint8_t getMenuEvent(QueueHandle_t queue, TickType_t ticks_timeout);
 
 /* Private variables ---------------------------------------------------------*/
-static const char* TAG = "selection_list";
 
 /* Exported functions --------------------------------------------------------*/
 
@@ -177,8 +176,7 @@ uint8_t getMenuEvent(QueueHandle_t queue, TickType_t ticks_timeout)
                 ? U8X8_MSG_GPIO_MENU_NEXT
                 : U8X8_MSG_GPIO_MENU_PREV;
         }
-    } else { /* timeout */
-        ESP_LOGW(TAG, "timeout waiting for an option");
+    } else {
         return MENU_EVENT_TIMEOUT;
     }
     return 0; /* invalid message, no event */

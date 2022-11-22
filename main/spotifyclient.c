@@ -1,6 +1,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include <string.h>
 
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "limits.h"
@@ -22,7 +23,7 @@
 #define ACQUIRE_LOCK(mux)   xSemaphoreTake(mux, portMAX_DELAY)
 #define RELEASE_LOCK(mux)   xSemaphoreGive(mux)
 #define MAX_HTTP_BUFFER     8192
-#define RETRIES_ERR_CONN    2
+#define RETRIES_ERR_CONN    3
 
 /* -"204" on "GET /me/player" means the actual device is inactive
  * -"204" on "PUT /me/player" means playback sucessfuly transfered
@@ -90,7 +91,7 @@ extern const char spotify_cert_pem_start[] asm("_binary_spotify_cert_pem_start")
 extern const char spotify_cert_pem_end[] asm("_binary_spotify_cert_pem_end");
 
 /* Private function prototypes -----------------------------------------------*/
-static esp_err_t   _validate_token();
+static esp_err_t   validate_token();
 static inline void free_track(TrackInfo* track);
 static inline void handle_track_fetched(TrackInfo** new_track);
 static inline void handle_err_connection();
@@ -158,7 +159,7 @@ void player_cmd(rotary_encoder_event_t* event)
     }
 
     ACQUIRE_LOCK(client_lock);
-    _validate_token();
+    validate_token();
     state.handler_cb = default_event_handler;
 
     PREPARE_CLIENT(state, state.access_token, "application/json");
@@ -204,24 +205,28 @@ retry:
 void http_user_playlists()
 {
     ACQUIRE_LOCK(client_lock);
-    _validate_token();
+    validate_token();
     state.handler_cb = playlists_handler;
     state.method = HTTP_METHOD_GET;
     state.endpoint = PLAYERURL("/me/playlists?offset=0&limit=50");
 
     PREPARE_CLIENT(state, state.access_token, "application/json");
+retry:
     state.err = esp_http_client_perform(state.client);
     state.status_code = esp_http_client_get_status_code(state.client);
+    if (state.err == ESP_OK) {
+        retries = 0;
+    } else {
+        handle_err_connection();
+        goto retry;
+    }
     RELEASE_LOCK(client_lock);
-    /* if (state.err == ESP_OK) {
-        ESP_LOGI(TAG, "Received:\n%s", buffer);
-    } */
 }
 
 void http_available_devices()
 {
     ACQUIRE_LOCK(client_lock);
-    _validate_token();
+    validate_token();
     state.handler_cb = default_event_handler;
     state.endpoint = PLAYERURL(PLAYER "/devices");
     state.method = HTTP_METHOD_GET;
@@ -255,19 +260,20 @@ void http_set_device(const char* dev_id)
     sprintf(buf, "{\"device_ids\":[\"%s\"],\"play\":true}", dev_id); // TODO: true if now playing, else false
 
     ACQUIRE_LOCK(client_lock);
-    _validate_token();
+    validate_token();
     state.handler_cb = default_event_handler;
     state.method = HTTP_METHOD_PUT;
     state.endpoint = PLAYERURL(PLAYER);
     esp_http_client_set_post_field(state.client, buf, strlen(buf));
 
     PREPARE_CLIENT(state, state.access_token, "application/json");
-
+retry:
     state.err = esp_http_client_perform(state.client);
     state.status_code = esp_http_client_get_status_code(state.client);
     esp_http_client_set_post_field(state.client, NULL, 0); /* Clear post field */
     free(buf);
     if (state.err == ESP_OK) {
+        retries = 0;
         if (PLAYBACK_TRANSFERED(state)) {
             ESP_LOGI(TAG, "Playback transfered to: %s", dev_id);
             NOTIFY_DISPLAY(PLAYBACK_TRANSFERRED_OK);
@@ -275,8 +281,8 @@ void http_set_device(const char* dev_id)
             NOTIFY_DISPLAY(PLAYBACK_TRANSFERRED_FAIL);
         }
     } else {
-        ESP_LOGE(TAG, "Error STATUS_CODE: %d", state.status_code);
-        NOTIFY_DISPLAY(PLAYBACK_TRANSFERRED_FAIL);
+        handle_err_connection();
+        goto retry;
     }
     RELEASE_LOCK(client_lock);
 }
@@ -288,7 +294,7 @@ void http_play_context_uri(const char* uri)
     sprintf(buf, "{\"context_uri\":\"%s\"}", uri);
 
     ACQUIRE_LOCK(client_lock);
-    _validate_token();
+    validate_token();
     state.handler_cb = default_event_handler;
     state.method = HTTP_METHOD_PUT;
     state.endpoint = PLAYERURL(PLAY);
@@ -304,7 +310,7 @@ void http_play_context_uri(const char* uri)
 
 /* Private functions ---------------------------------------------------------*/
 
-static esp_err_t _validate_token()
+static esp_err_t validate_token()
 {
     /* client_lock lock already must be aquired */
 
@@ -363,13 +369,12 @@ static inline void handle_track_fetched(TrackInfo** new_track)
 
 static inline void handle_err_connection()
 {
-    ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(state.err));
-    if (retries > 0 && ++retries <= RETRIES_ERR_CONN) {
-        ESP_LOGW(TAG, "Retrying %d/%d...", retries, RETRIES_ERR_CONN);
-    } else {
-        ESP_LOGW(TAG, "Restarting...");
-        esp_restart();
-    }
+    ESP_LOGE(TAG, "HTTP %s request failed: %s",
+        HTTP_METHOD_LOOKUP[state.method],
+        esp_err_to_name(state.err));
+    assert((++retries <= RETRIES_ERR_CONN) && "Restarting...");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGW(TAG, "Retrying %d/%d...", retries, RETRIES_ERR_CONN);
 }
 
 static esp_err_t _http_event_handler(esp_http_client_event_t* evt)
@@ -391,7 +396,7 @@ static void now_playing_task(void* pvParameters)
     CALLOC(new_track->artists, sizeof(*new_track->artists));
 
     uint32_t notif;
-    bool     enabled = false;
+    bool     task_enabled = false;
 
     while (1) {
         xTaskNotifyWait(
@@ -401,22 +406,16 @@ static void now_playing_task(void* pvParameters)
             pdMS_TO_TICKS(MS_NOTIF_POLLING) /* xTicksToWait */
         );
 
-        switch (notif) {
-        case TASK_ENABLED:
-            enabled = true;
-            break;
-        case TASK_DISABLED:
-            enabled = false;
-            break;
-        default:
-            break;
-        }
+        if (notif == ENABLE_TASK)
+            task_enabled = true;
+        else if (notif == DISABLE_TASK)
+            task_enabled = false;
 
-        if (!enabled)
+        if (!task_enabled)
             continue;
 
         ACQUIRE_LOCK(client_lock);
-        _validate_token();
+        validate_token();
         state.handler_cb = default_event_handler;
         state.method = HTTP_METHOD_GET;
         state.endpoint = PLAYERURL(PLAYING);
@@ -429,9 +428,9 @@ static void now_playing_task(void* pvParameters)
         state.status_code = esp_http_client_get_status_code(state.client);
         esp_http_client_set_post_field(state.client, NULL, 0); /* Clear post field */
         if (state.err == ESP_OK) {
+            retries = 0;
             ESP_LOGD(TAG, "Received:\n%s", buffer);
             if (state.status_code == 200) {
-                retries = 0;
                 handle_track_fetched(&new_track);
                 goto exit;
             }
@@ -453,7 +452,7 @@ static void now_playing_task(void* pvParameters)
                     goto exit;
                 }
 
-                _validate_token();
+                validate_token();
                 state.handler_cb = default_event_handler;
                 state.method = HTTP_METHOD_PUT;
                 state.endpoint = PLAYERURL(PLAYER);

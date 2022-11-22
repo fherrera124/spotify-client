@@ -16,7 +16,6 @@ extern "C" {
 #endif
 
 /* Includes ------------------------------------------------------------------*/
-#include "esp_http_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -27,8 +26,8 @@ extern "C" {
 
 /* Exported types ------------------------------------------------------------*/
 typedef enum {
-    TASK_ENABLED = 1,
-    TASK_DISABLED,
+    ENABLE_TASK = 1,
+    DISABLE_TASK,
 } nowPlayingAction;
 
 typedef enum {
@@ -54,9 +53,8 @@ extern TaskHandle_t PLAYING_TASK;
 extern TrackInfo*   TRACK;
 
 /* Exported macro ------------------------------------------------------------*/
-#define ENABLE_PLAYING_TASK  xTaskNotify(PLAYING_TASK, TASK_ENABLED, eSetValueWithOverwrite)
-#define DISABLE_PLAYING_TASK xTaskNotify(PLAYING_TASK, TASK_DISABLED, eSetValueWithOverwrite)
-#define GO_CHECK_DEVICE      xTaskNotify(PLAYING_TASK, CHECK_DEVICE, eSetValueWithOverwrite)
+#define ENABLE_PLAYING_TASK  xTaskNotify(PLAYING_TASK, ENABLE_TASK, eSetValueWithOverwrite)
+#define DISABLE_PLAYING_TASK xTaskNotify(PLAYING_TASK, DISABLE_TASK, eSetValueWithOverwrite)
 /* unblock task without updating its notify value */
 #define UNBLOCK_PLAYING_TASK xTaskNotify(PLAYING_TASK, pdFALSE, eNoAction)
 /* ms to wait to fetch current track */

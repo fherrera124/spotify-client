@@ -20,8 +20,6 @@ extern "C" {
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#include "handler_callbacks.h"
-
 /* Exported types ------------------------------------------------------------*/
 
 /* Globally scoped variables declarations ------------------------------------*/
@@ -31,7 +29,7 @@ extern TaskHandle_t DISPLAY_TASK;
 #define NOTIFY_DISPLAY(event) xTaskNotify(DISPLAY_TASK, event, eSetBits)
 
 /* Exported functions prototypes ---------------------------------------------*/
-void display_init(UBaseType_t priority, QueueHandle_t encoder_q_hlr);
+void display_init(UBaseType_t priority, QueueHandle_t encoder_queue_hlr);
 
 #ifdef __cplusplus
 }

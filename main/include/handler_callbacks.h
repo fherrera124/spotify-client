@@ -6,7 +6,6 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "esp_http_client.h"
-#include "strlib.h"
 
 /* Exported functions prototypes ---------------------------------------------*/
 void default_event_handler(char* buffer, esp_http_client_event_t* evt);

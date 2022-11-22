@@ -30,16 +30,16 @@ static void playlists_page(u8g2_t* u8g2);
 static void available_devices_page(u8g2_t* u8g2);
 
 /* Locally scoped variables --------------------------------------------------*/
-QueueHandle_t      encoder_queue_hlr;
-static const char* TAG = "DISPLAY";
+static QueueHandle_t encoder;
+static const char*   TAG = "DISPLAY";
 
 /* Globally scoped variables definitions -------------------------------------*/
 TaskHandle_t DISPLAY_TASK = NULL;
 
 /* Exported functions --------------------------------------------------------*/
-void display_init(UBaseType_t priority, QueueHandle_t encoder_q_hlr)
+void display_init(UBaseType_t priority, QueueHandle_t encoder_queue_hlr)
 {
-    encoder_queue_hlr = encoder_q_hlr;
+    encoder = encoder_queue_hlr;
     int res = xTaskCreate(display_task, "display_task", 4096, NULL, priority, &DISPLAY_TASK);
     assert((res == pdPASS) && "Error creating task");
 }
@@ -79,7 +79,7 @@ static void initial_menu_page(u8g2_t* u8g2)
     u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
 
     do {
-        selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
+        selection = userInterfaceSelectionList(u8g2, encoder,
             "Spotify", selection,
             "Available devices\nNow playing\nMy playlists",
             portMAX_DELAY);
@@ -120,7 +120,7 @@ static void playlists_page(u8g2_t* u8g2)
     } else if (notif == PLAYLISTS_OK) {
         u8g2_ClearBuffer(u8g2);
         u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
-        selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
+        selection = userInterfaceSelectionList(u8g2, encoder,
             "My Playlists", selection,
             PLAYLISTS->items_string,
             portMAX_DELAY);
@@ -194,7 +194,7 @@ static void now_playing_page(u8g2_t* u8g2)
         /* Intercept any encoder event -----------------------------------------------*/
 
         rotary_encoder_event_t queue_event;
-        if (pdTRUE == xQueueReceive(encoder_queue_hlr, &queue_event, 0)) {
+        if (pdTRUE == xQueueReceive(encoder, &queue_event, 0)) {
             if (queue_event.event_type == BUTTON_EVENT) {
                 switch (queue_event.btn_event) {
                 case SHORT_PRESS:
@@ -217,7 +217,7 @@ static void now_playing_page(u8g2_t* u8g2)
                 vTaskDelay(pdMS_TO_TICKS(500));
                 /* The task is active again. Reset the queue to discard
                  * the last move of the rotary encoder */
-                xQueueReset(encoder_queue_hlr);
+                xQueueReset(encoder);
             }
         }
 
@@ -254,7 +254,7 @@ static void now_playing_page(u8g2_t* u8g2)
             switch (track_state) {
             case playing:;
                 time_t prg = progress_base + pdTICKS_TO_MS(finish - start);
-                /* track finished, early unblock of playlist task */
+                /* track finished, early unblock of PLAYING_TASK */
                 if (prg > TRACK->duration_ms) {
                     /* only notify once */
                     if (progress_ms != TRACK->duration_ms) {
@@ -286,7 +286,7 @@ static void now_playing_page(u8g2_t* u8g2)
             if ((progress_ms / 1000) != (last_progress / 1000)) {
                 last_progress = progress_ms;
                 strcpy(secs, u8x8_u8toa((progress_ms / 1000) % 60, 2));
-                ESP_LOGI(TAG, "Time: %s:%s", mins, secs);
+                ESP_LOGD(TAG, "Time: %s:%s", mins, secs);
             }
         }
 
@@ -336,7 +336,7 @@ static void now_playing_context_menu(u8g2_t* u8g2)
     u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
 
     do {
-        selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
+        selection = userInterfaceSelectionList(u8g2, encoder,
             "Track options", selection,
             sl, portMAX_DELAY);
         switch (selection) {
@@ -376,7 +376,7 @@ update_list:
 
     if (notif == ACTIVE_DEVICES_FOUND) {
         u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
-        selection = userInterfaceSelectionList(u8g2, encoder_queue_hlr,
+        selection = userInterfaceSelectionList(u8g2, encoder,
             "Select a device", selection,
             DEVICES->items_string,
             pdMS_TO_TICKS(10000));

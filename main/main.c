@@ -8,11 +8,6 @@
 */
 
 /* Includes ------------------------------------------------------------------*/
-#include <stdlib.h>
-#include <string.h>
-
-#include "esp_event.h"
-#include "esp_http_client.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 
@@ -27,13 +22,11 @@
 /* Private macro -------------------------------------------------------------*/
 
 /* Private variables ---------------------------------------------------------*/
-static const char* TAG = "MAIN";
-
+static const char*    TAG = "MAIN";
 rotary_encoder_info_t info = { 0 };
 
 /* Imported function prototypes ----------------------------------------------*/
-void      wifi_init_sta(void);
-esp_err_t rotary_encoder_default_init(rotary_encoder_info_t* info);
+void wifi_init_sta(void);
 
 /**/
 
@@ -45,7 +38,6 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     wifi_init_sta();
-
     ESP_ERROR_CHECK(rotary_encoder_default_init(&info));
     spotify_client_init(5);
     display_init(5, info.queue);
