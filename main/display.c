@@ -172,13 +172,13 @@ static void now_playing_page(u8g2_t* u8g2)
     }
     // else...
     u8g2_SetFont(u8g2, u8g2_font_helvB18_tr);
-    u8g2_uint_t track_width = 10 + u8g2_GetStrWidth(u8g2, TRACK->name);
-    u8g2_uint_t offset = 0, x = 0;
-
-    TickType_t start = xTaskGetTickCount();
-    time_t     progress_base = TRACK->progress_ms;
-    time_t     last_progress = 0, progress_ms = 0;
-    char       mins[3], secs[3];
+    u8g2_uint_t track_width = u8g2_GetStrWidth(u8g2, TRACK->name);
+    u8g2_uint_t offset = 0;
+    TickType_t  start_over = 0;
+    TickType_t  start = xTaskGetTickCount();
+    time_t      progress_base = TRACK->progress_ms;
+    time_t      last_progress = 0, progress_ms = 0;
+    char        mins[3], secs[3];
     strcpy(mins, u8x8_u8toa(progress_base / 60000, 2));
     strcpy(secs, u8x8_u8toa((progress_base / 1000) % 60, 2));
     enum {
@@ -233,7 +233,7 @@ static void now_playing_page(u8g2_t* u8g2)
                 ESP_LOGW(TAG, "New track event");
                 last_progress = offset = 0;
                 u8g2_SetFont(u8g2, u8g2_font_helvB18_tr);
-                track_width = 20 + u8g2_GetStrWidth(u8g2, TRACK->name);
+                track_width = u8g2_GetStrWidth(u8g2, TRACK->name);
             } else if (notif == LAST_DEVICE_FAILED) {
                 DISABLE_PLAYING_TASK;
                 ESP_LOGW(TAG, "Last device failed");
@@ -246,11 +246,6 @@ static void now_playing_page(u8g2_t* u8g2)
 
         } else { /* TICKSTOWAIT expired */
             TickType_t finish = xTaskGetTickCount();
-            if (pdTICKS_TO_MS(finish - start) > (MS_NOTIF_POLLING + 5000)) {
-                ESP_LOGW(TAG, "Timeout waiting for track notification");
-                DISABLE_PLAYING_TASK;
-                return available_devices_page(u8g2);
-            }
             switch (track_state) {
             case playing:;
                 time_t prg = progress_base + pdTICKS_TO_MS(finish - start);
@@ -290,22 +285,22 @@ static void now_playing_page(u8g2_t* u8g2)
             }
         }
 
-        /* Display scrolling text and time progress ----------------------------------*/
-
-        x = offset;
+        /* Display track information -------------------------------------------------*/
 
         u8g2_SetFont(u8g2, u8g2_font_helvB18_tr);
         u8g2_ClearBuffer(u8g2);
 
-        /* Scrolling track name */
-        do {
-            u8g2_DrawStr(u8g2, x, 35, TRACK->name);
-            x += track_width;
-        } while (x < u8g2->width);
+        /* Track name */
+        u8g2_DrawStr(u8g2, offset, 35, TRACK->name);
 
-        offset -= 1; // scroll by one pixel
-        if ((u8g2_uint_t)offset < (u8g2_uint_t)-track_width) {
-            offset = 0; // start over again
+        if (track_width > u8g2->width) {
+            if ((xTaskGetTickCount() - start_over) > pdMS_TO_TICKS(500)) { // wait 500ms before start scrolling
+                offset -= 1; // scroll by one pixel
+                if ((u8g2_uint_t)offset < (u8g2_uint_t)(u8g2->width - track_width)) {
+                    offset = 0; // start over again
+                    start_over = xTaskGetTickCount();
+                }
+            }
         }
         /* Artists */
         /* IMPLEMENT */

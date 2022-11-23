@@ -24,6 +24,9 @@ extern "C" {
 #include "parseobjects.h"
 #include "rotary_encoder.h"
 
+/* Exported macro ------------------------------------------------------------*/
+#define MAX_HTTP_BUFFER 8192
+
 /* Exported types ------------------------------------------------------------*/
 typedef enum {
     ENABLE_TASK = 1,

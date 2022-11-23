@@ -12,8 +12,6 @@
 #include "spotifyclient.h"
 
 /* Private macro -------------------------------------------------------------*/
-#define MAX_HTTP_BUFFER 8192
-
 #define MATCH_KEY(data, str, left) \
     strncpy(buffer, data, left);   \
     buffer[left] = '\0';           \

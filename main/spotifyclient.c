@@ -22,7 +22,6 @@
 #define PLAYERURL(ENDPOINT) "https://api.spotify.com/v1" ENDPOINT
 #define ACQUIRE_LOCK(mux)   xSemaphoreTake(mux, portMAX_DELAY)
 #define RELEASE_LOCK(mux)   xSemaphoreGive(mux)
-#define MAX_HTTP_BUFFER     8192
 #define RETRIES_ERR_CONN    3
 
 /* -"204" on "GET /me/player" means the actual device is inactive
