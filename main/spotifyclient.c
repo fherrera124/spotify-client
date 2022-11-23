@@ -443,9 +443,8 @@ static void now_playing_task(void* pvParameters)
                     first_try = false;
                     MALLOC(buf, 33 + strlen(TRACK->device->id));
                     sprintf(buf, "{\"device_ids\":[\"%s\"],\"play\":false}", TRACK->device->id);
-                    ESP_LOGW(TAG, "Device to transfer playback: %s", TRACK->device->id);
                 } else {
-                    ESP_LOGW(TAG, "Failed connecting with last device");
+                    ESP_LOGW(TAG, "Failed to reconnect with the device");
                     first_try = true;
                     NOTIFY_DISPLAY(LAST_DEVICE_FAILED);
                     goto exit;
@@ -459,7 +458,7 @@ static void now_playing_task(void* pvParameters)
                 goto prepare;
             }
             if (PLAYBACK_TRANSFERED(state)) {
-                ESP_LOGI(TAG, "Playback transfered to: %s", TRACK->device->id);
+                ESP_LOGI(TAG, "Reconnected with device: %s", TRACK->device->id);
                 first_try = true;
                 goto exit;
             }

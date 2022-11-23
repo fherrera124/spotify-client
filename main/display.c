@@ -12,6 +12,8 @@
 /* Private macro -------------------------------------------------------------*/
 #define TICKSTOWAIT pdMS_TO_TICKS(50)
 
+#define MARGIN_RIGHT 5
+
 #define DRAW_STR(u8g2, x, y, font, str) \
     u8g2_ClearBuffer(u8g2);             \
     u8g2_SetFont(u8g2, font);           \
@@ -171,10 +173,10 @@ static void now_playing_page(u8g2_t* u8g2)
         return available_devices_page(u8g2);
     }
     // else...
-    u8g2_SetFont(u8g2, u8g2_font_helvB18_tr);
-    u8g2_uint_t track_width = u8g2_GetStrWidth(u8g2, TRACK->name);
+    u8g2_SetFont(u8g2, u8g2_font_helvB14_te);
+    u8g2_uint_t track_width = u8g2_GetUTF8Width(u8g2, TRACK->name) + MARGIN_RIGHT;
     u8g2_uint_t offset = 0;
-    TickType_t  start_over = 0;
+    TickType_t  finished_scroll = 0;
     TickType_t  start = xTaskGetTickCount();
     time_t      progress_base = TRACK->progress_ms;
     time_t      last_progress = 0, progress_ms = 0;
@@ -228,12 +230,12 @@ static void now_playing_page(u8g2_t* u8g2)
             progress_base = TRACK->progress_ms;
 
             if (notif == SAME_TRACK) {
-                ESP_LOGW(TAG, "Same track event");
+                ESP_LOGD(TAG, "Same track event");
             } else if (notif == NEW_TRACK) {
-                ESP_LOGW(TAG, "New track event");
+                ESP_LOGD(TAG, "New track event");
                 last_progress = offset = 0;
-                u8g2_SetFont(u8g2, u8g2_font_helvB18_tr);
-                track_width = u8g2_GetStrWidth(u8g2, TRACK->name);
+                u8g2_SetFont(u8g2, u8g2_font_helvB14_te);
+                track_width = u8g2_GetUTF8Width(u8g2, TRACK->name) + MARGIN_RIGHT;
             } else if (notif == LAST_DEVICE_FAILED) {
                 DISABLE_PLAYING_TASK;
                 ESP_LOGW(TAG, "Last device failed");
@@ -287,22 +289,23 @@ static void now_playing_page(u8g2_t* u8g2)
 
         /* Display track information -------------------------------------------------*/
 
-        u8g2_SetFont(u8g2, u8g2_font_helvB18_tr);
+        u8g2_SetFont(u8g2, u8g2_font_helvB14_te);
         u8g2_ClearBuffer(u8g2);
 
         /* Track name */
-        u8g2_DrawStr(u8g2, offset, 35, TRACK->name);
+        u8g2_DrawUTF8(u8g2, offset, 35, TRACK->name);
 
-        if (track_width > u8g2->width) {
-            if ((xTaskGetTickCount() - start_over) > pdMS_TO_TICKS(500)) { // wait 500ms before start scrolling
+        if ((track_width - MARGIN_RIGHT) > u8g2->width) {
+            /* wait 500ms before start scrolling again */
+            if ((xTaskGetTickCount() - finished_scroll) > pdMS_TO_TICKS(500)) {
                 offset -= 1; // scroll by one pixel
                 if ((u8g2_uint_t)offset < (u8g2_uint_t)(u8g2->width - track_width)) {
                     offset = 0; // start over again
-                    start_over = xTaskGetTickCount();
+                    finished_scroll = xTaskGetTickCount();
                 }
             }
         }
-        /* Artists */
+        /* Track artists */
         /* IMPLEMENT */
 
         /* Time progress */
