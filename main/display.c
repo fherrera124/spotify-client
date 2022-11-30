@@ -5,7 +5,7 @@
 #include "handler_callbacks.h"
 #include "spotifyclient.h"
 #include "strlib.h"
-#include "u8g2_esp8266_hal.h"
+#include "u8g2_esp32_hal.h"
 
 #include "selection_list.h"
 
@@ -47,22 +47,6 @@ void display_init(UBaseType_t priority, QueueHandle_t encoder_queue_hlr)
 }
 
 /* Private functions ---------------------------------------------------------*/
-static void setup_display(u8g2_t* u8g2)
-{
-    u8g2_esp8266_hal_t u8g2_esp8266_hal = {
-        .mosi = GPIO_NUM_13,
-        .clk = GPIO_NUM_14,
-        .cs = GPIO_NUM_15
-    };
-    u8g2_esp8266_hal_init(u8g2_esp8266_hal);
-    u8g2_Setup_st7920_s_128x64_f(u8g2, U8G2_R0, u8g2_esp8266_spi_byte_cb,
-        u8g2_esp8266_gpio_and_delay_cb); // init u8g2 structure
-
-    u8g2_InitDisplay(u8g2); // send init sequence to the display, display is in sleep mode after this
-    u8g2_ClearDisplay(u8g2);
-    u8g2_SetPowerSave(u8g2, 0); // wake up display
-}
-
 static void display_task(void* args)
 {
     u8g2_t u8g2;
@@ -71,14 +55,32 @@ static void display_task(void* args)
     while (1) {
         initial_menu_page(&u8g2);
     }
-    vTaskDelete(NULL);
+    assert(false && "Unexpected exit of infinite task loop");
+}
+
+static void setup_display(u8g2_t* u8g2)
+{
+    u8g2_esp32_hal_t u8g2_esp32_hal = U8G2_ESP32_HAL_DEFAULT(U8G2_ESP32_HAL_SPI_DEFAULT);
+    u8g2_esp32_hal.clk = GPIO_NUM_14;
+    u8g2_esp32_hal.mosi = GPIO_NUM_13;
+    u8g2_esp32_hal.cs = GPIO_NUM_15;
+    u8g2_esp32_hal.spi_flags = SPI_DEVICE_POSITIVE_CS; // https://www.esp32.com/viewtopic.php?p=88613#p88613
+
+    u8g2_esp32_hal_init(u8g2_esp32_hal);
+
+    u8g2_Setup_st7920_s_128x64_f(u8g2, U8G2_R0, u8g2_esp32_spi_byte_cb,
+        u8g2_esp32_gpio_and_delay_cb); // init u8g2 structure
+
+    u8g2_InitDisplay(u8g2); // send init sequence to the display, display is in sleep mode after this
+    u8g2_ClearDisplay(u8g2);
+    u8g2_SetPowerSave(u8g2, 0); // wake up display
 }
 
 static void initial_menu_page(u8g2_t* u8g2)
 {
     uint8_t selection = 1;
 
-    u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
+    u8g2_SetFont(u8g2, u8g2_font_6x12_te);
 
     do {
         selection = userInterfaceSelectionList(u8g2, encoder,
@@ -104,14 +106,6 @@ static void playlists_page(u8g2_t* u8g2)
 
     uint8_t selection = 1;
 
-    assert(PLAYLISTS == NULL);
-
-    PLAYLISTS = calloc(1, sizeof(*PLAYLISTS));
-    assert(PLAYLISTS && "Error allocating memory");
-
-    PLAYLISTS->values = calloc(1, sizeof(*PLAYLISTS->values));
-    assert(PLAYLISTS->values && "Error allocating memory");
-
     http_user_playlists();
     uint32_t notif;
     xTaskNotifyWait(0, ULONG_MAX, &notif, portMAX_DELAY);
@@ -121,36 +115,29 @@ static void playlists_page(u8g2_t* u8g2)
         vTaskDelay(pdMS_TO_TICKS(3000));
     } else if (notif == PLAYLISTS_OK) {
         u8g2_ClearBuffer(u8g2);
-        u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
+        u8g2_SetFont(u8g2, u8g2_font_6x12_te);
         selection = userInterfaceSelectionList(u8g2, encoder,
             "My Playlists", selection,
-            PLAYLISTS->items_string,
+            PLAYLISTS.items_string,
             portMAX_DELAY);
 
-        StrListItem* uri = PLAYLISTS->values->first;
+        StrListItem* uri = PLAYLISTS.values.first;
 
-        for (uint16_t i = 1; i < selection; i++) {
+        for (uint16_t i = 1; i < selection; i++)
             uri = uri->next;
-        }
 
-        ESP_LOGI(TAG, "URI: %s", uri->str);
+        ESP_LOGD(TAG, "URI selected: %s", uri->str);
 
         http_play_context_uri(uri->str);
         vTaskDelay(50);
         UNBLOCK_PLAYING_TASK;
     }
     /* cleanup */
-    if (PLAYLISTS->items_string) {
-        free(PLAYLISTS->items_string);
-        PLAYLISTS->items_string = NULL;
+    if (PLAYLISTS.items_string) {
+        free(PLAYLISTS.items_string);
+        PLAYLISTS.items_string = NULL;
     }
-    if (PLAYLISTS->values) {
-        strListClear(PLAYLISTS->values);
-        free(PLAYLISTS->values);
-        PLAYLISTS->values = NULL;
-    }
-    free(PLAYLISTS);
-    PLAYLISTS = NULL;
+    strListClear(&PLAYLISTS.values);
 
     return now_playing_page(u8g2);
 }
@@ -331,7 +318,7 @@ static void now_playing_context_menu(u8g2_t* u8g2)
 
     const char* sl = "artist\nqueue\nas\nkauhs\nBack\nMain Menu";
 
-    u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
+    u8g2_SetFont(u8g2, u8g2_font_6x12_te);
 
     do {
         selection = userInterfaceSelectionList(u8g2, encoder,
@@ -362,27 +349,21 @@ static void available_devices_page(u8g2_t* u8g2)
 update_list:
     selection = 1;
 
-    DEVICES = calloc(1, sizeof(*DEVICES));
-    assert(DEVICES && "Error allocating memory for DEVICES");
-
-    DEVICES->values = calloc(1, sizeof(*DEVICES->values));
-    assert(DEVICES->values && "Error allocating memory for DEVICES->values");
-
     http_available_devices();
     uint32_t notif;
     xTaskNotifyWait(0, ULONG_MAX, &notif, portMAX_DELAY);
 
     if (notif == ACTIVE_DEVICES_FOUND) {
-        u8g2_SetFont(u8g2, u8g2_font_6x12_tr);
+        u8g2_SetFont(u8g2, u8g2_font_6x12_te);
         selection = userInterfaceSelectionList(u8g2, encoder,
             "Select a device", selection,
-            DEVICES->items_string,
+            DEVICES.items_string,
             pdMS_TO_TICKS(10000));
 
         if (selection == MENU_EVENT_TIMEOUT)
             goto cleanup;
 
-        StrListItem* device = DEVICES->values->first;
+        StrListItem* device = DEVICES.values.first;
 
         for (uint16_t i = 1; i < selection; i++) {
             device = device->next;
@@ -407,17 +388,13 @@ update_list:
         DRAW_STR(u8g2, 0, 20, u8g2_font_tom_thumb_4x6_mr, "No devices found :c");
         vTaskDelay(pdMS_TO_TICKS(3000));
     }
+
 cleanup:
-    if (DEVICES->items_string) {
-        free(DEVICES->items_string);
-        DEVICES->items_string = NULL;
+    if (DEVICES.items_string) {
+        free(DEVICES.items_string);
+        DEVICES.items_string = NULL;
     }
-    if (DEVICES->values) {
-        strListClear(DEVICES->values);
-        free(DEVICES->values);
-    }
-    free(DEVICES);
-    DEVICES = NULL;
+    strListClear(&DEVICES.values);
 
     if (selection == MENU_EVENT_TIMEOUT)
         goto update_list;

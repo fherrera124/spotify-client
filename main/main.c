@@ -14,6 +14,7 @@
 #include "display.h"
 #include "rotary_encoder.h"
 #include "spotifyclient.h"
+#include "esp_system.h"
 
 /* External variables --------------------------------------------------------*/
 

@@ -1,7 +1,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "esp_log.h"
 #include "jsmn.h"
@@ -10,33 +9,36 @@
 /* Private macro -------------------------------------------------------------*/
 #define TRACK_CALLBACKS_SIZE  6
 #define TOKENS_CALLBACKS_SIZE 2
-#define MAX_TOKENS            600
+#define MAX_TOKENS            500
+#define PLAYLISTS_TOKENS      200
+#define DEVICES_TOKENS        200
 
 /* Private types -------------------------------------------------------------*/
 typedef void (*PathCb)(const char*, jsmntok_t*, void*);
 
 /* Private function prototypes -----------------------------------------------*/
-static void onDevicePlaying(const char* js, jsmntok_t* root, void* obj);
-static void onTrackName(const char* js, jsmntok_t* root, void* obj);
-static void onArtistsName(const char* js, jsmntok_t* root, void* obj);
-static void onAlbumName(const char* js, jsmntok_t* root, void* obj);
-static void onTrackIsPlaying(const char* js, jsmntok_t* root, void* obj);
-static void onTrackTime(const char* js, jsmntok_t* root, void* obj);
-static void onAccessToken(const char* js, jsmntok_t* root, void* obj);
-static void onExpiresIn(const char* js, jsmntok_t* root, void* obj);
-static int  natoi(const char* str, short len);
-static void parsejson(const char* js, PathCb* callbacks, size_t callbacksSize, void* obj);
+static void       onDevicePlaying(const char* js, jsmntok_t* root, void* obj);
+static void       onTrackName(const char* js, jsmntok_t* root, void* obj);
+static void       onArtistsName(const char* js, jsmntok_t* root, void* obj);
+static void       onAlbumName(const char* js, jsmntok_t* root, void* obj);
+static void       onTrackIsPlaying(const char* js, jsmntok_t* root, void* obj);
+static void       onTrackTime(const char* js, jsmntok_t* root, void* obj);
+static void       onAccessToken(const char* js, jsmntok_t* root, void* obj);
+static void       onExpiresIn(const char* js, jsmntok_t* root, void* obj);
+static inline int natoi(const char* str, short len);
+static void       parsejson(const char* js, PathCb* callbacks, size_t callbacksSize, void* obj);
 esp_err_t static str_append(jsmntok_t* obj, const char* buff, char** str);
-esp_err_t static uri_append(jsmntok_t* obj, const char* buf);
+static inline esp_err_t uri_append(jsmntok_t* obj, const char* buf);
 
 /* Locally scoped variables --------------------------------------------------*/
 static const char* TAG = "PARSE_OBJECT";
 PathCb             trackCallbacks[TRACK_CALLBACKS_SIZE];
 PathCb             tokensCallbacks[TOKENS_CALLBACKS_SIZE];
+static jsmntok_t   tokens[MAX_TOKENS];
 
 /* Globally scoped variables definitions -------------------------------------*/
-u8g2_items_list_t* PLAYLISTS = NULL;
-u8g2_items_list_t* DEVICES = NULL;
+u8g2_items_list_t PLAYLISTS = { 0 };
+u8g2_items_list_t DEVICES = { 0 };
 
 /* Exported functions --------------------------------------------------------*/
 void init_functions_cb()
@@ -64,24 +66,22 @@ void parseTokens(const char* js, Tokens* tokens)
 
 esp_err_t parse_available_devices(const char* js)
 {
-    jsmntok_t* tokens = malloc(sizeof(jsmntok_t) * MAX_TOKENS);
-
-    jsmntok_t* root = &tokens[0];
-
     jsmn_parser jsmn;
     jsmn_init(&jsmn);
 
     esp_err_t err = ESP_FAIL;
 
-    jsmnerr_t n = jsmn_parse(&jsmn, js, strlen(js), tokens, MAX_TOKENS);
-    assert((n >= 0) && error_str(n)); // TODO: check if error_str(n) is called
+    jsmnerr_t n = jsmn_parse(&jsmn, js, strlen(js), tokens, DEVICES_TOKENS);
+    if (n < 0) {
+        ESP_LOGE(TAG, "%s", error_str(n));
+        abort();
+    }
 
-    jsmntok_t* devices = object_get_member(js, root, "devices");
+    jsmntok_t* devices = object_get_member(js, tokens, "devices");
     assert(devices && "key \"devices\" missing");
 
     if (devices->size == 0) {
         ESP_LOGE(TAG, "No active devices found");
-        free(tokens);
         return ESP_FAIL;
     }
 
@@ -92,7 +92,7 @@ esp_err_t parse_available_devices(const char* js)
         jsmntok_t* value = object_get_member(js, device, "name");
         assert(value && "key \"name\" missing");
 
-        err = str_append(value, js, &DEVICES->items_string);
+        err = str_append(value, js, &DEVICES.items_string);
         assert((ESP_OK == err) && "str_append() failed. Error allocating memory");
 
         value = object_get_member(js, device, "id");
@@ -101,23 +101,22 @@ esp_err_t parse_available_devices(const char* js)
         char* id = jsmn_obj_dup(js, value);
         assert(id && "jsmn_obj_dup() failed. Error allocating memory");
 
-        err = strListAppend(DEVICES->values, id);
+        err = strListAppend(&DEVICES.values, id);
         assert((ESP_OK == err) && "strListAppend() failed. Error allocating memory");
     }
-    free(tokens);
     return ESP_OK;
 }
 
-void display_parse_playlist(const char* js, int output_len)
+void parse_playlist(const char* js, int output_len)
 {
     jsmn_parser jsmn;
     jsmn_init(&jsmn);
 
-    jsmntok_t* tokens = malloc(sizeof(jsmntok_t) * 100);
-    assert(tokens && "Error allocating memory");
-
-    jsmnerr_t n = jsmn_parse(&jsmn, js, output_len, tokens, 100);
-    assert((n >= 0) && error_str(n)); // TODO: check if error_str(n) is called
+    jsmnerr_t n = jsmn_parse(&jsmn, js, output_len, tokens, PLAYLISTS_TOKENS);
+    if (n < 0) {
+        ESP_LOGE(TAG, "%s", error_str(n));
+        abort();
+    }
 
     jsmntok_t* name = object_get_member(js, tokens, "name");
     assert(name && "key \"name\" missing");
@@ -125,10 +124,8 @@ void display_parse_playlist(const char* js, int output_len)
     jsmntok_t* uri = object_get_member(js, tokens, "uri");
     assert(uri && "key \"uri\" missing");
 
-    free(tokens);
-
-    esp_err_t err = str_append(name, js, &PLAYLISTS->items_string);
-   assert((ESP_OK == err) && "str_append() failed. Error allocating memory");
+    esp_err_t err = str_append(name, js, &PLAYLISTS.items_string);
+    assert((ESP_OK == err) && "str_append() failed. Error allocating memory");
 
     err = uri_append(uri, js);
     assert((ESP_OK == err) && "uri_append() failed. Error allocating memory");
@@ -145,16 +142,16 @@ static void onDevicePlaying(const char* js, jsmntok_t* root, void* obj)
     jsmntok_t* value = object_get_member(js, device, "id");
     assert(value && "key \"id\" missing");
 
-    track->device->id = jsmn_obj_dup(js, value);
-    assert(track->device->id && "Error allocating memory");
+    track->device.id = jsmn_obj_dup(js, value);
+    assert(track->device.id && "Error allocating memory");
 
     value = object_get_member(js, device, "name");
     assert(value && "key \"name\" missing");
 
-    track->device->name = jsmn_obj_dup(js, value);
-    assert(track->device->name && "Error allocating memory");
+    track->device.name = jsmn_obj_dup(js, value);
+    assert(track->device.name && "Error allocating memory");
 
-    ESP_LOGD(TAG, "Device id: %s, name: %s", track->device->id, track->device->name);
+    ESP_LOGD(TAG, "Device id: %s, name: %s", track->device.id, track->device.name);
 }
 
 static void onTrackName(const char* js, jsmntok_t* root, void* obj)
@@ -194,7 +191,7 @@ static void onArtistsName(const char* js, jsmntok_t* root, void* obj)
         char* artist = jsmn_obj_dup(js, value);
         assert(artist && "Error allocating memory");
 
-        esp_err_t err = strListAppend(track->artists, artist);
+        esp_err_t err = strListAppend(&track->artists, artist);
         assert((err == ESP_OK) && "Error allocating memory");
     }
 }
@@ -254,8 +251,7 @@ static void onAccessToken(const char* js, jsmntok_t* root, void* obj)
     jsmntok_t* value = object_get_member(js, root, "access_token");
     assert(value && "key \"access_token\" missing");
 
-    token->access_token = jsmn_obj_dup(js, value);
-    assert(token->access_token && "Error allocating memory");
+    strncat(token->access_token, js + value->start, value->end - value->start);
 }
 
 static void onExpiresIn(const char* js, jsmntok_t* root, void* obj)
@@ -269,7 +265,7 @@ static void onExpiresIn(const char* js, jsmntok_t* root, void* obj)
     token->expiresIn = time(0) + seconds;
 }
 
-static int natoi(const char* str, short len)
+static inline int natoi(const char* str, short len)
 {
     int ret = 0;
     for (short i = 0; i < len; ++i) {
@@ -280,21 +276,20 @@ static int natoi(const char* str, short len)
 
 static void parsejson(const char* js, PathCb* callbacks, size_t callbacksSize, void* obj)
 {
-    jsmntok_t* tokens = malloc(sizeof(*tokens) * MAX_TOKENS);
-
     jsmn_parser jsmn;
     jsmn_init(&jsmn);
 
     jsmnerr_t n = jsmn_parse(&jsmn, js, strlen(js), tokens, MAX_TOKENS);
-    assert((n >= 0) && error_str(n)); // TODO: check if error_str(n) is called
-
-    jsmntok_t* root = &tokens[0];
-    for (size_t i = 0; i < callbacksSize; i++) {
-        PathCb fn = callbacks[i];
-        fn(js, root, obj);
+    if (n < 0) {
+        ESP_LOGE(TAG, "%s", error_str(n));
+        ESP_LOGE(TAG, "%s", js);
+        abort();
     }
 
-    free(tokens);
+    for (size_t i = 0; i < callbacksSize; i++) {
+        PathCb fn = callbacks[i];
+        fn(js, tokens, obj);
+    }
 }
 
 /**
@@ -326,14 +321,16 @@ esp_err_t static str_append(jsmntok_t* obj, const char* buf, char** str)
     }
     (*str)[str_len + obj_len] = '\0';
 
+    ESP_LOGI(TAG, "str len: %d", strlen(*str));
+
     return ESP_OK;
 }
 
-esp_err_t static uri_append(jsmntok_t* obj, const char* buf)
+static inline esp_err_t uri_append(jsmntok_t* obj, const char* buf)
 {
     char* uri = jsmn_obj_dup(buf, obj);
     if (uri == NULL)
         return ESP_ERR_NO_MEM;
 
-    return strListAppend(PLAYLISTS->values, uri);
+    return strListAppend(&PLAYLISTS.values, uri);
 }
