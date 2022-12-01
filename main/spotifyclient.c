@@ -314,8 +314,7 @@ static esp_err_t validate_token()
 
     parseTokens(http_buffer, &s_state.tokens);
 
-    ESP_LOGW(TAG, "Access Token obtained:\n%s", &s_state.tokens.access_token[8]);
-    ESP_LOGW(TAG, "Access Token length:\n%d", strlen(s_state.tokens.access_token));
+    ESP_LOGW(TAG, "Access Token obtained:\n%s", &s_state.tokens.access_token[7]);
     return ESP_OK;
 }
 

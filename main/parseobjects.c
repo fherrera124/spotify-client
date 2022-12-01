@@ -251,6 +251,8 @@ static void onAccessToken(const char* js, jsmntok_t* root, void* obj)
     jsmntok_t* value = object_get_member(js, root, "access_token");
     assert(value && "key \"access_token\" missing");
 
+    token->access_token[7] = '\0'; // don't touch the "Bearer " part
+
     strncat(token->access_token, js + value->start, value->end - value->start);
 }
 
