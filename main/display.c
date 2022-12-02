@@ -12,8 +12,6 @@
 /* Private macro -------------------------------------------------------------*/
 #define TICKSTOWAIT pdMS_TO_TICKS(50)
 
-#define MARGIN_RIGHT 5
-
 #define DRAW_STR(u8g2, x, y, font, str) \
     u8g2_ClearBuffer(u8g2);             \
     u8g2_SetFont(u8g2, font);           \
@@ -161,13 +159,10 @@ static void now_playing_page(u8g2_t* u8g2)
     }
     // else...
     u8g2_SetFont(u8g2, u8g2_font_helvB14_te);
-    u8g2_uint_t track_width = u8g2_GetUTF8Width(u8g2, TRACK->name) + MARGIN_RIGHT;
-    u8g2_uint_t offset = 0;
-    TickType_t  finished_scroll = 0;
-    TickType_t  start = xTaskGetTickCount();
-    time_t      progress_base = TRACK->progress_ms;
-    time_t      last_progress = 0, progress_ms = 0;
-    char        mins[3], secs[3];
+    TickType_t start = xTaskGetTickCount();
+    time_t     progress_base = TRACK->progress_ms;
+    time_t     last_progress = 0, progress_ms = 0;
+    char       mins[3], secs[3];
     strcpy(mins, u8x8_u8toa(progress_base / 60000, 2));
     strcpy(secs, u8x8_u8toa((progress_base / 1000) % 60, 2));
     enum {
@@ -177,6 +172,14 @@ static void now_playing_page(u8g2_t* u8g2)
         toBeUnpaused,
     } track_state
         = TRACK->isPlaying ? playing : paused;
+
+    /* local struct that stores the state of the track on display */
+    struct {
+        u8g2_uint_t width;
+        u8g2_uint_t offset;
+        bool        on_rigthmost; /* the track reached the right extreme */
+        TickType_t  xtr_reached; /* tick count when track reached any extreme */
+    } _track = { u8g2_GetUTF8Width(u8g2, TRACK->name), 0, false, 0 };
 
     while (1) {
 
@@ -220,9 +223,9 @@ static void now_playing_page(u8g2_t* u8g2)
                 ESP_LOGD(TAG, "Same track event");
             } else if (notif == NEW_TRACK) {
                 ESP_LOGD(TAG, "New track event");
-                last_progress = offset = 0;
+                last_progress = _track.offset = 0;
                 u8g2_SetFont(u8g2, u8g2_font_helvB14_te);
-                track_width = u8g2_GetUTF8Width(u8g2, TRACK->name) + MARGIN_RIGHT;
+                _track.width = u8g2_GetUTF8Width(u8g2, TRACK->name);
             } else if (notif == LAST_DEVICE_FAILED) {
                 DISABLE_PLAYING_TASK;
                 ESP_LOGW(TAG, "Last device failed");
@@ -279,16 +282,24 @@ static void now_playing_page(u8g2_t* u8g2)
         u8g2_SetFont(u8g2, u8g2_font_helvB14_te);
         u8g2_ClearBuffer(u8g2);
 
-        /* Track name */
-        u8g2_DrawUTF8(u8g2, offset, 35, TRACK->name);
+        /* print Track name */
+        u8g2_DrawUTF8(u8g2, _track.offset, 35, TRACK->name);
 
-        if ((track_width - MARGIN_RIGHT) > u8g2->width) {
-            /* wait 500ms before start scrolling again */
-            if ((xTaskGetTickCount() - finished_scroll) > pdMS_TO_TICKS(500)) {
-                offset -= 1; // scroll by one pixel
-                if ((u8g2_uint_t)offset < (u8g2_uint_t)(u8g2->width - track_width)) {
-                    offset = 0; // start over again
-                    finished_scroll = xTaskGetTickCount();
+        /* Calculation of the offset for the next iteration in case
+         * the width of the track doesn't fit on display */
+        if (_track.width > u8g2->width) {
+            /* if completed the time of track freezed on any extreme. (1000 ms) */
+            if (pdMS_TO_TICKS(1000) < (xTaskGetTickCount() - _track.xtr_reached)) {
+                if (_track.on_rigthmost) {
+                    _track.on_rigthmost = false;
+                    _track.offset = 0;
+                    _track.xtr_reached = xTaskGetTickCount();
+                } else {
+                    _track.offset -= 1; // scroll by one pixel
+                    if ((u8g2_uint_t)_track.offset < (u8g2_uint_t)(u8g2->width - _track.width)) {
+                        _track.on_rigthmost = true;
+                        _track.xtr_reached = xTaskGetTickCount();
+                    }
                 }
             }
         }
