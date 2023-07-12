@@ -27,7 +27,7 @@ static const char*    TAG = "MAIN";
 rotary_encoder_info_t info = { 0 };
 
 /* Imported function prototypes ----------------------------------------------*/
-void wifi_init_sta(void);
+extern void wifi_init_sta(void);
 
 /**/
 
@@ -38,8 +38,8 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
-    wifi_init_sta();
     ESP_ERROR_CHECK(rotary_encoder_default_init(&info));
-    spotify_client_init(5);
     display_init(5, info.queue);
+    wifi_init_sta();
+    spotify_client_init(5);
 }

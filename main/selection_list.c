@@ -166,8 +166,6 @@ uint8_t getMenuEvent(QueueHandle_t queue, TickType_t ticks_timeout)
             case SHORT_PRESS:
                 return U8X8_MSG_GPIO_MENU_SELECT;
             case MEDIUM_PRESS:
-                /* not yet defined */
-                break;
             case LONG_PRESS:
                 return U8X8_MSG_GPIO_MENU_HOME;
             }

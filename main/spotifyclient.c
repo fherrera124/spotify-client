@@ -128,7 +128,7 @@ void player_cmd(rotary_encoder_event_t* event)
     if (event->event_type == BUTTON_EVENT) {
         cmd = cmdToggle;
     } else {
-        cmd = event->re_state.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? cmdNext : cmdPrev;
+        cmd = event->re_state.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? cmdPrev : cmdNext;
     }
     switch (cmd) {
     case cmdToggle:
