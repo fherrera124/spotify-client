@@ -4,6 +4,7 @@
 
 #include "esp_log.h"
 #include "esp_tls.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "display.h"
@@ -168,7 +169,7 @@ void playlists_handler(char* http_buffer, esp_http_client_event_t* evt)
 match_result_t static skip_blanks(char** ptr, int* left)
 {
     while (*left >= 0) {
-        if (!isspace(**ptr))
+        if (!isspace((unsigned char)**ptr)) // isspace expects an integer, the value of which can fit in an unsigned char
             return CHAR_DETECTED;
         s_output_len++;
         (*left)--, (*ptr)++;
