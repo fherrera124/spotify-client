@@ -18,7 +18,7 @@ typedef struct
     bool  is_active;
     char* name;
     char* type;
-    char* volume_percent;
+    char volume_percent[4];
 } Device;
 
 typedef struct

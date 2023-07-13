@@ -154,8 +154,7 @@ static void onDevicePlaying(const char* js, jsmntok_t* root, void* obj)
     value = object_get_member(js, device, "volume_percent");
     assert(value && "key \"volume_percent\" missing");
 
-    track->device.volume_percent = jsmn_obj_dup(js, value);
-    assert(track->device.volume_percent && "Error allocating memory");
+    snprintf(track->device.volume_percent, 4, "%s\n", js + value->start);
 
     ESP_LOGD(TAG, "Device id: %s, name: %s", track->device.id, track->device.name);
 }

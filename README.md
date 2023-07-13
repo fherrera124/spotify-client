@@ -1,3 +1,16 @@
+## Primero lo primero
+
+https://github.com/espressif/idf-installer
+
+seguir la instalacion normalmente, seleccionar la instalacion de CP210x USB to UART Bridge VCP Drivers
+
+
+
+## links de interes para comenzar:
+
+https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/
+
+
 ## Spotify-display
 
 #Steps:

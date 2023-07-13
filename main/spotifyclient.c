@@ -19,6 +19,7 @@
 #define PAUSE               PLAYER "/pause"
 #define PREV                PLAYER "/previous"
 #define NEXT                PLAYER "/next"
+#define VOLUME              PLAYER "/volume?volume_percent="
 #define PLAYERURL(ENDPOINT) "https://api.spotify.com/v1" ENDPOINT
 #define ACQUIRE_LOCK(mux)   xSemaphoreTake(mux, portMAX_DELAY)
 #define RELEASE_LOCK(mux)   xSemaphoreGive(mux)
@@ -76,7 +77,7 @@ static Client_state_t    s_state = { .tokens.access_token = { 'B', 'e', 'a', 'r'
 static const char*       HTTP_METHOD_LOOKUP[] = { "GET", "POST", "PUT" };
 
 /* Globally scoped variables definitions -------------------------------------*/
-TaskHandle_t PLAYING_TASK = NULL;
+TaskHandle_t PLAYER_TASK = NULL;
 TrackInfo*   TRACK = &(TrackInfo) { 0 }; /* pointer to an unnamed object, constructed in place
 by the the COMPOUND LITERAL expression "(TrackInfo) { 0 }". NOTE: Although the syntax of a compound
 literal is similar to a cast, the important distinction is that a cast is a non-lvalue expression
@@ -89,7 +90,7 @@ extern const char spotify_cert_pem_end[] asm("_binary_spotify_cert_pem_end");
 /* Private function prototypes -----------------------------------------------*/
 static esp_err_t validate_token();
 static esp_err_t _http_event_handler(esp_http_client_event_t* evt);
-static void      now_playing_task(void* pvParameters);
+static void      player_task(void* pvParameters);
 static void      free_track(TrackInfo* track);
 static void      handle_track_fetched(TrackInfo** new_track);
 static void      handle_err_connection();
@@ -117,7 +118,7 @@ void spotify_client_init(UBaseType_t priority)
 
     init_functions_cb();
 
-    int res = xTaskCreate(now_playing_task, "now_playing_task", 4096, NULL, priority, &PLAYING_TASK);
+    int res = xTaskCreate(player_task, "player_task", 4096, NULL, priority, &PLAYER_TASK);
     assert((res == pdPASS) && "Error creating task");
 }
 
@@ -180,7 +181,7 @@ retry:
         } else {
             /* The command was prev or next, change track in progress */
             vTaskDelay(pdMS_TO_TICKS(1000)); /* wait for the server to update the current track */
-            UNBLOCK_PLAYING_TASK; /* unblock task before reach MS_NOTIF_POLLING timeout */
+            UNBLOCK_PLAYER_TASK; /* unblock task before reach MS_NOTIF_POLLING timeout */
         }
     } else {
         handle_err_connection();
@@ -266,6 +267,31 @@ retry:
     RELEASE_LOCK(client_lock);
 }
 
+void http_update_volume(int8_t volume_percent)
+{
+    ACQUIRE_LOCK(client_lock);
+    validate_token();
+    sprintf(sprintf_buf, "%s%d", PLAYERURL(VOLUME), volume_percent);
+
+    s_state.handler_cb = default_http_event_handler;
+    s_state.method = HTTP_METHOD_PUT;
+    s_state.endpoint = sprintf_buf;
+
+    PREPARE_CLIENT(s_state, s_state.tokens.access_token, "application/json");
+    s_state.err = esp_http_client_perform(s_state.client);
+    s_state.status_code = esp_http_client_get_status_code(s_state.client);
+
+    if (s_state.err != ESP_OK || s_state.status_code != 204) {
+        ESP_LOGE(TAG, "HTTP PUT request failed: %s, status code: %d",
+            esp_err_to_name(s_state.err), s_state.status_code);
+        ESP_LOGE(TAG, "The answer was:\n%s", http_buffer);
+    } else {
+        ESP_LOGW(TAG, "vol: %d", volume_percent);
+        itoa(volume_percent, TRACK->device.volume_percent, 10);
+    }
+    RELEASE_LOCK(client_lock);
+}
+
 void http_play_context_uri(const char* uri)
 {
     ACQUIRE_LOCK(client_lock);
@@ -324,6 +350,9 @@ static inline void handle_track_fetched(TrackInfo** new_track)
 
     SWAP_PTRS(*new_track, TRACK);
 
+    if (strcmp(TRACK->device.volume_percent, (*new_track)->device.volume_percent)) {
+        NOTIFY_DISPLAY(VOLUME_CHANGED);
+    }
     if (0 == strcmp(TRACK->name, (*new_track)->name)) {
         free_track(*new_track);
         NOTIFY_DISPLAY(SAME_TRACK);
@@ -358,7 +387,7 @@ static esp_err_t _http_event_handler(esp_http_client_event_t* evt)
     return ESP_OK;
 }
 
-static void now_playing_task(void* pvParameters)
+static void player_task(void* pvParameters)
 {
     TrackInfo* new_track = &(TrackInfo) { 0 };
     CALLOC(new_track->name, 1);
@@ -467,5 +496,5 @@ static inline void free_track(TrackInfo* track)
     free(track->device.id);
     free(track->device.name);
     free(track->device.type);
-    free(track->device.volume_percent);
+    strcpy(track->device.volume_percent, "-1");
 }
