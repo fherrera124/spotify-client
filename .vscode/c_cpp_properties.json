@@ -1,3 +1,6 @@
+// https://github.com/espressif/vscode-esp-idf-extension/blob/master/docs/C_CPP_CONFIGURATION.md
+// Para generar automaticamente las configuraciones de .vscode:
+// command palette: "ESP-IDF: Add vscode configuration folder"
 {
     "configurations": [
         {
