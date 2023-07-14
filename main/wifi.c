@@ -106,8 +106,7 @@ static void event_handler(void* arg, esp_event_base_t event_base, int32_t event_
                 break;
             }
             if (smartconfig_mode) {
-/*                 send_err(10, 20, "Failed smartconfig"); */
-                send_err(0, 20, "Wrong credentials or AP unreachable. Restarting");
+                send_err("Wrong credentials or AP unreachable. Restarting...");
                 vTaskDelay(pdMS_TO_TICKS(3000));
                 esp_restart();
             };

@@ -30,7 +30,7 @@ extern TaskHandle_t DISPLAY_TASK;
 
 /* Exported functions prototypes ---------------------------------------------*/
 void display_init(UBaseType_t priority, QueueHandle_t encoder_queue_hlr);
-void send_err(uint16_t x, uint16_t y, const char* msg);
+void send_err(const char* msg);
 
 #ifdef __cplusplus
 }
