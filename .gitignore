@@ -5,8 +5,6 @@ build/
 sdkconfig
 sdkconfig.old
 
-.vscode/
-
 spotify_client.code-workspace
 
 # Prerequisites
